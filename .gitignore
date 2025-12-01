@@ -26,3 +26,11 @@ pip-wheel-metadata/
 # Windows
 Thumbs.db
 desktop.ini
+
+# Virtual environment (local)
+.venv/
+
+# Local certs (do not commit keys/certs)
+certs/
+*.pem
+*.key
