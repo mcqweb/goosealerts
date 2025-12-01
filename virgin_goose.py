@@ -9,9 +9,13 @@ from unidecode import unidecode
 import unicodedata
 import re 
 import unicodedata
-import betfairlightweight
-from betfairlightweight import filters
-from betfairlightweight.exceptions import APIError
+import urllib.request
+import urllib.error
+import urllib.parse
+from types import SimpleNamespace
+from betfair import Betfair
+
+# ========= INITIALIZATION =========
 
 load_dotenv()
 london = pytz.timezone("Europe/London")
@@ -38,17 +42,6 @@ def _clear_cache_at_midnight():
             print(f"[WARN] Failed to clear cache: {e}", flush=True)
 
 # ========= ENV / PATHS =========
-def _must(name: str) -> str:
-    v = os.getenv(name)
-    if not v:
-        print(f"[FATAL] Missing env var: {name}", flush=True)
-        sys.exit(1)
-    return v
-
-APP_KEY  = _must("APP_KEY")        # Betfair App Key
-USERNAME = _must("USERNAME")       # Betfair username
-PASSWORD = _must("PASSWORD")       # Betfair password
-
 NORD_USER = os.getenv("NORD_USER", "")
 NORD_PWD = os.getenv("NORD_PWD", "")
 NORD_LOCATION = os.getenv("NORD_LOCATION", "")
@@ -67,59 +60,11 @@ else:
 #FOR DEBUGGING/TESTING
 TEST_PRICE_OFFSET = float(os.getenv("TEST_PRICE_OFFSET", "0"))
 
-# Force-monitor specific market IDs (comma separated)
-OVERRIDE_INCLUDE_MARKET_IDS = [x.strip() for x in os.getenv("OVERRIDE_INCLUDE_MARKET_IDS", "").split(",") if x.strip()]
-
-CERT_FILE = os.getenv("CERT_FILE", "")
-KEY_FILE = os.getenv("KEY_FILE", "")
-# Backwards-compatible variable: may point to a directory or a single pem file
-CERTS_DIR  = os.getenv("CERTS_DIR", "certs")
-
 STATE_FILE = "state/goose_alert_state.json"
 # ========= CONFIG =========
 GBP_THRESHOLD_GOOSE  = float(os.getenv("GBP_THRESHOLD_GOOSE", "10"))
-
-TOP_LEVELS       = int(os.getenv("TOP_LEVELS", "1"))         # sum top N lay levels
-WINDOW_MINUTES   = int(os.getenv("WINDOW_MINUTES", "900"))    # KO window
-POLL_SECONDS     = int(os.getenv("POLL_SECONDS", "180"))     # poll interval
-MARKET_BOOK_BATCH= int(os.getenv("MARKET_BOOK_BATCH", "5"))  # fetch N markets per call (keep small)
-
-BATCH_COMP_SIZE  = 5
-MAX_RESULTS      = 1000
-
-# ========= DIAGNOSTICS (console-only) =========
-DEBUG_MODE       = os.getenv("DEBUG_MODE", "0") == "1"         # enable detailed filter logging
-# Log runners that are near the alert threshold across ALL markets (no Discord impact)
-DIAG_NEAR_PCT    = float(os.getenv("DIAG_NEAR_PCT", "0"))    # e.g. "0.7" logs >= 70% of threshold; "0" disables
-DIAG_MIN_ABS     = float(os.getenv("DIAG_MIN_ABS", "0"))     # absolute floor to log, e.g. "150"
-DIAG_EVERY_POLLS = int(os.getenv("DIAG_EVERY_POLLS", "1"))   # log every N polls to reduce spam
-
-# Core domestic & UEFA comps + UEFA WC Qualifiers (Europe)
-LEAGUE_NAME_SUBSTRINGS = [
-    # Domestic top leagues
-    "premier league","english premier","england premier","premiership",
-    "ligue 1","french ligue 1","bundesliga","german bund",
-    "la liga","spanish la liga","laliga","serie a","italian serie a",
-    # UEFA club comps
-    "champions league","uefa champions","europa league","uefa europa",
-    "conference league","uefa europa conference",
-    # UEFA WC Qualifiers (Europe) - common Betfair namings
-    "fifa world cup qualifiers (europe)",
-    "fifa world cup qualifiers - europe",
-    "world cup qualifiers europe",
-    "world cup qualifying europe",
-    "wc qualifiers europe",
-    "wc qualifying europe",
-    "wcq europe",
-    "wcq uefa",
-    "world cup qualifiers uefa",
-    "world cup qualifying uefa",
-]
-
-# FGS / AGS market type variations
-MARKET_TYPE_CODES_AGS = [
-    "ANYTIME_GOALSCORER","PLAYER_TO_SCORE","TO_SCORE","GOALSCORER"
-]
+GOOSE_MIN_ODDS      = float(os.getenv("GOOSE_MIN_ODDS", "1.2"))  # min odds for goose combos
+WINDOW_MINUTES   = int(os.getenv("WINDOW_MINUTES", "90"))    # KO window
 
 # ========= DISCORD =========
 def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=None, footer=None):
@@ -306,7 +251,6 @@ def getVirginMarkets(virgin_id):
     write_json(wanted_markets,cache_file)  
     return wanted_markets
 
-
 def find_player_sot_and_ga_ids(markets, player_name):
     """Return [SOT_id, GA_id] for `player_name` from the provided `markets` list.
 
@@ -362,7 +306,6 @@ def find_player_sot_and_ga_ids(markets, player_name):
 
     return {'name': player_name, 'sot_id': sot_id, 'ga_id': ga_id}
 
-   
 def getGoosedCombos(match, player_data, delay_seconds=0, ignore_lineup=False):
     back_odds_results = []
     combo_payload = {
@@ -482,402 +425,114 @@ def save_state(state):
 # ========= HELPERS =========
 def key_for(mid, sid): return f"{mid}:{sid}"
 
-def within_window(ko_dt, minutes):
-    now = datetime.now(timezone.utc)
-    return 0 <= (ko_dt - now).total_seconds() / 60 <= minutes
-
-def sum_lay_levels(runner, levels):
-    ats = (runner.ex.available_to_lay or [])[:levels] if getattr(runner, "ex", None) else []
-    return sum(l.size for l in ats)
-
-def best_back_tuple(r):
-    try:
-        lvl = (r.ex.available_to_back or [])[0]
-        return (lvl.price, lvl.size)
-    except Exception:
-        return (None, None)
-
-def best_lay_tuple(r):
-    try:
-        lvl = (r.ex.available_to_lay or [])[0]
-        return (lvl.price, lvl.size)
-    except Exception:
-        return (None, None)
-
-def lay_levels_list(runner, levels):
-    """Return list of (price, size) for first N lay levels for diagnostics."""
-    if not getattr(runner, "ex", None):
-        return []
-    lays = runner.ex.available_to_lay or []
-    out = []
-    for i in range(min(levels, len(lays))):
-        lvl = lays[i]
-        out.append((lvl.price, lvl.size))
-    return out
-
-def chunks(seq, n):
-    for i in range(0, len(seq), n):
-        yield seq[i:i+n]
-
-def name_contains(target, needles):
-    t = (target or "").lower()
-    return any(n in t for n in needles)
-
-def time_range_next_24h_utc():
-    now = datetime.now(timezone.utc)
-    return filters.time_range(from_=now, to=now + timedelta(hours=48))
-
-def is_ags_name(n):
-    n = (n or "").lower()
-    return any(p in n for p in [
-        "anytime goalscorer","any time goalscorer","to score anytime",
-        "player to score","to score","goalscorer"
-    ])
-
-# ========= AUTH & ROBUST CALLS =========
-def _login_or_die(trading):
-    try:
-        trading.login()
-        print("[AUTH] Login OK", flush=True)
-    except Exception as e:
-        print(f"[AUTH] Login failed: {e}", flush=True)
-        raise
-
-def _safe_discover(trading):
-    try:
-        comp_ids = discover_competitions(trading)
-        return discover_markets(trading, comp_ids), comp_ids
-    except APIError as e:
-        msg = str(e).upper()
-        if "NO_SESSION" in msg or "INVALID_SESSION" in msg:
-            print("[AUTH] Session invalid during discovery; re-logging...", flush=True)
-            _login_or_die(trading)
-            comp_ids = discover_competitions(trading)
-            return discover_markets(trading, comp_ids), comp_ids
-        raise
-
-def _fetch_books_safely(trading, mids, top_levels):
-    price_proj = filters.price_projection(
-        price_data=["EX_BEST_OFFERS"],
-        ex_best_offers_overrides={"bestPricesDepth": max(1, int(top_levels))},
-        virtualise=True,
-        rollover_stakes=False,
-    )
-
-    def _fetch_chunk(chunk):
-        return trading.betting.list_market_book(
-            market_ids=chunk,
-            price_projection=price_proj
-        ) or []
-
-    out = []
-    stack = [list(mids)]
-    while stack:
-        chunk = stack.pop()
-        try:
-            out.extend(_fetch_chunk(chunk))
-        except APIError as e:
-            msg = str(e).upper()
-            if "TOO_MUCH_DATA" in msg and len(chunk) > 1:
-                mid = len(chunk) // 2
-                stack.append(chunk[mid:])
-                stack.append(chunk[:mid])
-            elif "NO_SESSION" in msg or "INVALID_SESSION" in msg:
-                print("[AUTH] Session invalid during list_market_book; re-logging...", flush=True)
-                _login_or_die(trading)
-                out.extend(_fetch_chunk(chunk))
-            else:
-                raise
-    return out
-
-# ========= DISCOVERY =========
-def discover_competitions(trading):
-    comps = trading.betting.list_competitions(filter=filters.market_filter(event_type_ids=["1"]))
-    comp_ids = []
-    total_comps = 0
-    for c in comps or []:
-        comp = c.competition
-        name = getattr(comp, "name", "") or ""
-        total_comps += 1
-        if not comp:
-            if DEBUG_MODE:
-                print(f"[DEBUG] Filtered out competition (no comp object)", flush=True)
-            continue
-        low = name.lower()
-        if name_contains(low, LEAGUE_NAME_SUBSTRINGS):
-            comp_ids.append(comp.id)
-        elif DEBUG_MODE:
-            print(f"[DEBUG] Filtered out competition: {name} (not in LEAGUE_NAME_SUBSTRINGS)", flush=True)
-    # de-dup preserve order
-    out, seen = [], set()
-    for cid in comp_ids:
-        if cid not in seen:
-            seen.add(cid); out.append(cid)
-    if DEBUG_MODE:
-        print(f"[DEBUG] discover_competitions: {total_comps} total → {len(out)} after filtering", flush=True)
-    return out
-
-def _catalogue_batch(trading, comp_ids_batch, market_type_codes=None, text_query=None):
-    mf = filters.market_filter(
-        event_type_ids=["1"],
-        competition_ids=comp_ids_batch,
-        market_type_codes=market_type_codes,
-        text_query=text_query,
-        market_start_time=time_range_next_24h_utc(),
-        in_play_only=False,
-    )
-    return trading.betting.list_market_catalogue(
-        filter=mf,
-        market_projection=["MARKET_START_TIME","RUNNER_METADATA","COMPETITION","EVENT"],
-        max_results=MAX_RESULTS
-    )
-
-def discover_markets(trading, competition_ids):
-    cat = []
-    # Pass 1: official market type codes (AGS)
-    for batch in chunks(competition_ids, BATCH_COMP_SIZE):
-        cat += _catalogue_batch(trading, batch, market_type_codes=MARKET_TYPE_CODES_AGS) or []
-
-    # Pass 2: global name-search fallback if empty
-    if not cat:
-        AGS_NAME_QUERIES = ["anytime goalscorer", "to score anytime", "player to score"]
-
-        def _global_name_query(q):
-            mf = filters.market_filter(
-                event_type_ids=["1"],
-                text_query=q,
-                in_play_only=False,
-                market_start_time=time_range_next_24h_utc(),
-            )
-            return trading.betting.list_market_catalogue(
-                filter=mf,
-                market_projection=["MARKET_START_TIME", "RUNNER_METADATA", "COMPETITION", "EVENT"],
-                max_results=MAX_RESULTS
-            ) or []
-
-        for q in AGS_NAME_QUERIES:
-            cat += _global_name_query(q)
-
-    # Deduplicate and build mappings
-    market_ids, runner_name, comp_name, event_name, kickoff, market_label, event_id = [], {}, {}, {}, {}, {}, {}
-    seen = set()
-    for c in cat:
-        mid = c.market_id
-        if mid in seen:
-            continue
-        seen.add(mid)
-        market_ids.append(mid)
-        comp_name[mid] = getattr(c.competition, "name", "?")
-        event_name[mid] = getattr(c.event, "name", c.market_name)
-        kickoff[mid] = c.market_start_time.replace(tzinfo=timezone.utc)
-        event_id[mid] = getattr(c.event, "id", None)
-
-        mt = (getattr(c, "market_type", None) or "").upper()
-        name = (getattr(c, "market_name", "") or "")
-        market_label[mid] = "AGS"
-
-        for r in c.runners or []:
-            runner_name[(mid, r.selection_id)] = r.runner_name
-
-    if DEBUG_MODE:
-        print(f"[DEBUG] discover_markets: {len(cat)} catalogues → {len(market_ids)} unique markets after filtering", flush=True)
-    return market_ids, runner_name, comp_name, event_name, kickoff, market_label, event_id
-
 # ========= MAIN LOOP =========
 def main():
-    trading = betfairlightweight.APIClient(
-        username=USERNAME,
-        password=PASSWORD,
-        app_key=APP_KEY,
-        certs=CERTS_DIR,
-    )
-    _login_or_die(trading)
-
-    alerted = load_state()
-    poll_count = 0
-
-    (market_ids, runner_name, comp_name, event_name, kickoff, market_label, event_id), comp_ids = _safe_discover(trading)
-
-    # Force-include market IDs from env (for debugging/safety/spot checks)
-    if OVERRIDE_INCLUDE_MARKET_IDS:
+    betfair = Betfair()
+    debug = betfair.debug_save
+    active_comps = betfair.get_active_whitelisted_competitions()   
+    for comp in active_comps:
+        cid = comp.get('comp_id')
+        cname = comp.get('comp_name')
         try:
-            # We need catalogue metadata for names; fetch by time window and filter by id
-            extra_cats = []
-            batch = trading.betting.list_market_catalogue(
-                filter=filters.market_filter(event_type_ids=["1"], market_start_time=time_range_next_24h_utc()),
-                market_projection=["MARKET_START_TIME","RUNNER_METADATA","COMPETITION","EVENT"],
-                max_results=MAX_RESULTS
-            ) or []
-            ids_set = set(OVERRIDE_INCLUDE_MARKET_IDS)
-            extra_cats.extend([c for c in batch if getattr(c, "market_id", "") in ids_set])
-
-            for c in extra_cats:
-                mid = c.market_id
-                if mid not in market_ids:
-                    market_ids.append(mid)
-                comp_name[mid] = getattr(c.competition, "name", "?")
-                event_name[mid] = getattr(c.event, "name", c.market_name)
-                kickoff[mid] = c.market_start_time.replace(tzinfo=timezone.utc)
-                mt = (getattr(c, "market_type", None) or "").upper()
-                name = (getattr(c, "market_name", "") or "")
-                market_label[mid] = "AGS"
-                for r in c.runners or []:
-                    runner_name[(mid, r.selection_id)] = r.runner_name
-                print(comp_name)
+            matches = betfair.fetch_matches_for_competition(cid)
         except Exception as e:
-            print("[WARN] Failed to force-include market IDs:", e, flush=True)
-
-    print(f"[START] Bot online. Monitoring {len(market_ids)} markets across {len(comp_ids)} competitions (next 24h).", flush=True)
-    KEEPALIVE_EVERY = 10
-    REFRESH_CATALOGUE_EVERY = 15
-
-    while True:
-        poll_count += 1
-        print(f"[LOOP] markets={len(market_ids)} poll={poll_count}", flush=True)
-
-        # Clear cache at midnight
-        _clear_cache_at_midnight()
-
-        if poll_count % KEEPALIVE_EVERY == 0:
-            try:
-                trading.keep_alive()
-            except Exception as e:
-                print("[WARN] keep_alive failed:", e, flush=True)
-
-        if poll_count % REFRESH_CATALOGUE_EVERY == 0 or not market_ids:
-            try:
-                (market_ids, runner_name, comp_name, event_name, kickoff, market_label, event_id), comp_ids = _safe_discover(trading)
-                # Re-apply force include on refresh as well
-                if OVERRIDE_INCLUDE_MARKET_IDS:
-                    for mid in OVERRIDE_INCLUDE_MARKET_IDS:
-                        if mid not in market_ids:
-                            market_ids.append(mid)
-                print(f"[INFO] Catalogue refresh: {len(market_ids)} markets in scope (next 24h).", flush=True)
-            except Exception as e:
-                print("[WARN] Catalogue refresh failed:", e, flush=True)
-
-        active = [mid for mid in market_ids if mid in kickoff and within_window(kickoff[mid], WINDOW_MINUTES)]
-        # also keep forced IDs active if they have KO known and are within window
-        for mid in OVERRIDE_INCLUDE_MARKET_IDS:
-            if mid in kickoff and within_window(kickoff[mid], WINDOW_MINUTES) and mid not in active:
-                active.append(mid)
-
-        if DEBUG_MODE:
-            print(f"[DEBUG] Main loop: {len(market_ids)} markets → {len(active)} within window ({WINDOW_MINUTES} mins)", flush=True)
-
-        if not active:
-            time.sleep(POLL_SECONDS)
+            print(f"  Error fetching matches for {cid}: {e}")
             continue
-
-        try:
-            books = []
-            for mids in chunks(active, MARKET_BOOK_BATCH):
-                books.extend(_fetch_books_safely(trading, mids, TOP_LEVELS))
-        except APIError as e:
-            print("[WARN] list_market_book APIError:", e, flush=True)
-            time.sleep(POLL_SECONDS)
+        if not matches:
+            #No upcoming matches found for this competition
             continue
-        except Exception as e:
-            print("[WARN] list_market_book error:", e, flush=True)
-            time.sleep(POLL_SECONDS)
-            continue
+    
+    for m in matches:
+        mid = m.get('id')
+        mname = m.get('name')
+        kickoff = m.get('openDate')
+        print(f"  - {mid}: {mname} @ {kickoff}")
+        # If the match is today (UTC), fetch odds for the TO_SCORE market
 
-        for mb in books or []:
-            mid = mb.market_id
-            label = market_label.get(mid, "AGS")
-            threshold = GBP_THRESHOLD_GOOSE
-
-            for r in mb.runners or []:
-                pname = runner_name.get((mid, r.selection_id), str(r.selection_id))
-                k = f"{pname}:{event_id[mid]}"
-                if alerted.get(k):
-                    if DEBUG_MODE:
-                        print(f"[DEBUG] Filtered (already alerted): {mid} | {pname}", flush=True)
-                    continue
-
-                lay_size = sum_lay_levels(r, TOP_LEVELS)
-
-                # --- ALERT when crossing threshold ---
-                if lay_size >= threshold:
-                    pname = runner_name.get((mid, r.selection_id), str(r.selection_id))
-                    KO = kickoff[mid]
-                    bbp, bbs = best_back_tuple(r)
-                    if bbp and bbp < 1.2:
-                        continue
-                    blp, bls = best_lay_tuple(r)
-                    print(f"Lay Stake: £{bls}, Lay Price: {blp}")
-
-                    # GET OC RESULTS
-                    oc_results = []
-                    match_slug = None
-                    virgin_id = map_betfair_to_virgin(event_id[mid])['target_id']
-                    print("Virgin ID:", virgin_id)
-                    print("Player:", pname)
-                    virgin_markets = getVirginMarkets(virgin_id)
-                    player_data = find_player_sot_and_ga_ids(virgin_markets, pname)
-                    if player_data:
-                        combo_odds = getGoosedCombos({'id': virgin_id}, player_data)  
-                        '''
-                        [{'match_id': 'SBTE_2_1024825599', 'player_name': 'Morgan Gibbs-White', 'odds': 2.23, 'bet_type': 'AGS', 'bet_request_json': {'selections': [{'id': 'SBTS_2_3950170697', 'eachWay': False}, {'id': 'SBTS_2_3950170555', 'eachWay': False}], 'oddsFormat': 'DECIMAL', 'selectionGroups': [{'id': 10, 'selections': ['SBTS_2_3950170697', 'SBTS_2_3950170555']}], 'betTypes': [{'type': 'YOURBET'}]}, 'updated_at': '2025-11-27T11:26:20.755707+00:00'}]
-                        '''
-                        # `getGoosedCombos` returns a list of result dicts.
-                        # Safely handle that shape and print the odds from the first result.
-                        
-                        if combo_odds:
-                            if isinstance(combo_odds, list):
-                                try:
-                                    back_odds = combo_odds[0].get('odds')
-                                except Exception:
-                                    print('Combo Odds (raw list):', combo_odds)
-                            elif isinstance(combo_odds, dict):
-                                back_odds = combo_odds.get('odds')
-                            else:
-                                print('Combo Odds (raw):', combo_odds)
-                            print(f"Player: {player_data['name']} | Back Odds: {back_odds} | Lay Odds: {blp}")
-                        else:
-                            print('Combo Odds: no result')
-                        if (back_odds+TEST_PRICE_OFFSET) > blp:
-                            rating = round(back_odds / blp * 100, 2)
-                            title = f"{pname} - {back_odds}/{blp} ({rating}%)"
-                            # Format KO as hours:minutes (HH:MM)
+        if kickoff:
+            kt = datetime.fromisoformat(kickoff.replace('Z', '+00:00'))
+            ko_str = kt.strftime("%H:%M")
+            now_utc = datetime.now(timezone.utc)
+            # consider matches within the next x minutes (inclusive)
+            if now_utc <= kt <= now_utc + timedelta(minutes=WINDOW_MINUTES):
+                print(f"    -> Match within next {WINDOW_MINUTES} minutes; fetching odds...")
+                # If the fetch_matches_for_competition response included market_nodes with TO_SCORE markets,
+                # call _fetch_market_odds directly using the known market id(s).
+                mnodes = m.get('market_nodes') or []
+                if mnodes:
+                    # build supported_markets mapping from nodes
+                    supported = {}
+                    for node in mnodes:
+                        desc = node.get('description', {}) if isinstance(node, dict) else {}
+                        mtype = desc.get('marketType') or node.get('marketType') or ''
+                        midid = node.get('marketId') or node.get('market_id') or node.get('marketId')
+                        if mtype == betfair.AGS_MARKET_NAME and midid:
+                            supported[mtype] = {'market_id': midid, 'market_name': desc.get('marketName', ''), 'internal_market_name': 'AGS'}
+                            # call _fetch_market_odds for this market id
                             try:
-                                ko_str = KO.strftime("%H:%M") if hasattr(KO, 'strftime') else str(KO)
-                            except Exception:
-                                ko_str = str(KO)
-                            desc = f"**{event_name.get(mid,'?')}** ({ko_str})\n{comp_name.get(mid,'?')}\n\n£{int(lay_size)} available to [lay at {blp}](https://www.betfair.com/exchange/plus/football/market/{mid})"
-                            #There is an arb here
+                                odds = betfair._fetch_market_odds(str(midid), supported, m)
+                            except Exception as e:
+                                print(f"    Error fetching market {midid}: {e}")
+                                odds = []
+                            if odds:
+                                for o in odds:
+                                    pname = o.get('outcome',"")
+                                    price = o.get('odds',0)
+                                    lay_size = float(o.get('size', 0))
+                                    mkt = o.get('market') or o.get('market_type')
+                                    if lay_size >= GBP_THRESHOLD_GOOSE:
+                                        if price < GOOSE_MIN_ODDS:
+                                            continue
 
-                            '''
-                                [{'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.6, 'bookie': 'Bet365'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Boylesports'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'Coral'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.4, 'bookie': 'Betfred'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'Ladbrokes'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Paddy Power'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'QuinnBet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Sky Bet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Unibet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Bet Victor'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.75, 'bookie': 'William Hill'}]
-                            '''
- 
+                                        # GET OC RESULTS
+                                        oc_results = []
+                                        match_slug = None
+                                        virgin_id = map_betfair_to_virgin(mid)['target_id']
+                                        print("Virgin ID:", virgin_id)
+                                        print("Player:", pname)
+                                        virgin_markets = getVirginMarkets(virgin_id)
+                                        player_data = find_player_sot_and_ga_ids(virgin_markets, pname)
+                                        if player_data:
+                                            combo_odds = getGoosedCombos({'id': virgin_id}, player_data)  
+                                            '''
+                                            [{'match_id': 'SBTE_2_1024825599', 'player_name': 'Morgan Gibbs-White', 'odds': 2.23, 'bet_type': 'AGS', 'bet_request_json': {'selections': [{'id': 'SBTS_2_3950170697', 'eachWay': False}, {'id': 'SBTS_2_3950170555', 'eachWay': False}], 'oddsFormat': 'DECIMAL', 'selectionGroups': [{'id': 10, 'selections': ['SBTS_2_3950170697', 'SBTS_2_3950170555']}], 'betTypes': [{'type': 'YOURBET'}]}, 'updated_at': '2025-11-27T11:26:20.755707+00:00'}]
+                                            '''
+                                            # `getGoosedCombos` returns a list of result dicts.
+                                            # Safely handle that shape and print the odds from the first result.
+                                            
+                                            if combo_odds:
+                                                if isinstance(combo_odds, list):
+                                                    try:
+                                                        back_odds = combo_odds[0].get('odds')
+                                                    except Exception:
+                                                        print('Combo Odds (raw list):', combo_odds)
+                                                elif isinstance(combo_odds, dict):
+                                                    back_odds = combo_odds.get('odds')
+                                                else:
+                                                    print('Combo Odds (raw):', combo_odds)
+                                                print(f"Player: {player_data['name']} | Back Odds: {back_odds} | Lay Odds: {price}")
+                                            else:
+                                                print('Combo Odds: no result')
+                                            if (back_odds+TEST_PRICE_OFFSET) > price:
+                                                rating = round(back_odds / price * 100, 2)
+                                                title = f"{pname} - {back_odds}/{price} ({rating}%)"
+                                                desc = f"**{mname}** ({ko_str})\n{cname}\n\n£{int(lay_size)} available to [lay at {price}](https://www.betfair.com/exchange/plus/football/market/{mid})"
+                                                #There is an arb here
 
-                            fields = [
-                            ]
-                                                    
-                            embed_colour = 0xFF0000  # bright red for true arb
-                            #print("ARBING")
-                            if DISCORD_GOOSE_CHANNEL_ID:
-                                #print("SENDING")
-                                send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT")
+                                                '''
+                                                    [{'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.6, 'bookie': 'Bet365'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Boylesports'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'Coral'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.4, 'bookie': 'Betfred'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'Ladbrokes'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Paddy Power'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'QuinnBet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Sky Bet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Unibet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Bet Victor'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.75, 'bookie': 'William Hill'}]
+                                                '''
+                    
 
-                            alerted[k] = True
-                            save_state(alerted)
-                        elif DEBUG_MODE:
-                            pname = runner_name.get((mid, r.selection_id), str(r.selection_id))
-                            print(f"[DEBUG] Filtered (below threshold): {mid} | {pname} | £{int(lay_size)} < £{int(threshold)}", flush=True)
+                                                fields = [
+                                                ]
+                                                                        
+                                                embed_colour = 0xFF0000  # bright red for true arb
+                                                #print("ARBING")
+                                                if DISCORD_GOOSE_CHANNEL_ID:
+                                                    #print("SENDING")
+                                                    send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT")
 
-        # Purge alerts older than 12 hours
-        if poll_count % 10 == 0:
-            now = datetime.now(timezone.utc)
-            to_del = [k for k in list(alerted.keys())
-                if k.split(":",1)[0] in kickoff and kickoff[k.split(":",1)[0]] < now - timedelta(hours=12)]
-            for k in to_del:
-                alerted.pop(k, None)
-            if to_del:
-                save_state(alerted)
-
-        time.sleep(POLL_SECONDS)
 
 if __name__ == "__main__":
     main()

@@ -34,3 +34,9 @@ desktop.ini
 certs/
 *.pem
 *.key
+
+debug/
+SBTE_2_1024044112_virgin_markets.json
+SBTE_2_1024044128_virgin_markets.json
+virgin_event_SBTE_2_1024044112.json
+virgin_event_SBTE_2_1024044128.json
