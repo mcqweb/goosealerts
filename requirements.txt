@@ -1,0 +1,2 @@
+# Add your project dependencies here, for example:
+# requests==2.31.0

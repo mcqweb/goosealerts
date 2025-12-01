@@ -14,3 +14,15 @@ ENV/
 
 # Env files
 .env
+
+# IDE / editor
+.vscode/
+.idea/
+
+# Pytest / packaging
+.pytest_cache/
+pip-wheel-metadata/
+
+# Windows
+Thumbs.db
+desktop.ini
