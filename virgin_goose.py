@@ -43,6 +43,32 @@ def _clear_cache_at_midnight():
         except Exception as e:
             print(f"[WARN] Failed to clear cache: {e}", flush=True)
 
+
+def clear_cache():
+    """Remove any existing cache files/dirs on startup.
+
+    This deletes both `cache/` and `cached/` directories under the project
+    root (best-effort) and recreates an empty `cache/` directory so the
+    process has a place to write new cache files.
+    """
+    dirs = [
+        os.path.join(BASE_DIR, 'cache'),
+        os.path.join(BASE_DIR, 'cached')
+    ]
+    for d in dirs:
+        try:
+            if os.path.exists(d):
+                shutil.rmtree(d)
+                print(f"[INFO] Cleared cache directory: {d}")
+        except Exception as e:
+            print(f"[WARN] Failed to remove cache directory {d}: {e}")
+
+    # Ensure `cache/` exists for later writes
+    try:
+        os.makedirs(os.path.join(BASE_DIR, 'cache'), exist_ok=True)
+    except Exception:
+        pass
+
 # ========= ENV / PATHS =========
 NORD_USER = os.getenv("NORD_USER", "")
 NORD_PWD = os.getenv("NORD_PWD", "")
@@ -504,28 +530,29 @@ def already_alerted(player_name, match_id):
 # ========= MAIN LOOP =========
 def main():
     betfair = Betfair()
-    debug = betfair.debug_save
+    clear_cache()
     active_comps = betfair.get_active_whitelisted_competitions()   
     # Record the start date (London timezone). If the date changes during a run
     # we exit so a daily cron can restart a fresh process.
     run_start_date = datetime.now(london).date()
-    for comp in active_comps:
-        cid = comp.get('comp_id',0)
-        cname = comp.get('comp_name')
-        try:
-            matches = betfair.fetch_matches_for_competition(cid)
-        except Exception as e:
-            print(f"  Error fetching matches for {cid}: {e}")
-            continue
-        if not matches:
-            #No upcoming matches found for this competition
-            continue
     while True:
         # If the local date (Europe/London) has changed since the process started,
         # exit so the cron job can restart a fresh run for the new day.
         if datetime.now(london).date() != run_start_date:
             print(f"Local date changed from {run_start_date} to {datetime.now(london).date()}; exiting for daily restart")
             return
+        for comp in active_comps:
+            cid = comp.get('comp_id',0)
+            cname = comp.get('comp_name')
+            try:
+                matches = betfair.fetch_matches_for_competition(cid)
+            except Exception as e:
+                print(f"  Error fetching matches for {cid}: {e}")
+                continue
+            if not matches:
+                #No upcoming matches found for this competition
+                continue
+
         for m in matches:
             mid = m.get('id')
             mname = m.get('name')

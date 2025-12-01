@@ -116,7 +116,7 @@ class Betfair():
             competitions.append({'id': comp_id, 'name': comp_data.get('name', ''), 'competition': comp_data.get('name', '')})
         return competitions
 
-    def fetch_matches_for_competition(self, competition_id: str) -> List[Dict[str, Any]]:
+    def fetch_matches_for_competition(self, competition_id: str, cached=True) -> List[Dict[str, Any]]:
         params = {
                 "filter": {
                     "marketBettingTypes": [
@@ -209,14 +209,38 @@ class Betfair():
                 "currencyCode": "GBP",
                 "locale": "en_GB"
             }
-        r = requests.post(self.search_url, headers=self.headers, json=params, proxies=self.proxies)
-        r.raise_for_status()
-        data = r.json()
-        if getattr(self, 'debug_save', False):
+        # Try reuse cached search response if requested (use `cache/` directory)
+        cache_dir = os.path.join(os.path.dirname(__file__),  "cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        cached_file = os.path.join(cache_dir, f"events_comp_{competition_id}.json")
+        data = None
+        if cached:
             try:
-                self._maybe_save_debug(f"events_comp_{competition_id}", data)
+                if os.path.exists(cached_file) and os.path.getsize(cached_file) > 0:
+                    with open(cached_file, 'r', encoding='utf-8') as fh:
+                        data = json.load(fh)
+
             except Exception:
+                data = None
+
+        # If no fresh cache, perform the network request and save the result to cache
+        if data is None:
+            r = requests.post(self.search_url, headers=self.headers, json=params, proxies=self.proxies)
+            r.raise_for_status()
+            data = r.json()
+            # always persist a cached copy for reuse
+            try:
+                with open(cached_file, 'w', encoding='utf-8') as fh:
+                    json.dump(data, fh, indent=2, ensure_ascii=False)
+            except Exception:
+                print(f"Warning: failed to save cached events for competition {competition_id}")
+                exit()
                 pass
+            if getattr(self, 'debug_save', False):
+                try:
+                    self._maybe_save_debug(f"events_comp_{competition_id}", data)
+                except Exception:
+                    pass
         matches = []
         events_data = data.get('attachments', {}).get('events', {})
         markets_data = data.get('attachments', {}).get('markets', {}) # New: Retrieve markets data
@@ -320,9 +344,9 @@ class Betfair():
                 pass
 
         # cache raw response
-        cached_dir = os.path.join(os.path.dirname(__file__), "..", "cached")
-        os.makedirs(cached_dir, exist_ok=True)
-        cached_file = os.path.join(cached_dir, f"betfair_markets_{match_id}.json")
+        cache_dir = os.path.join(os.path.dirname(__file__), "..", "cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        cached_file = os.path.join(cache_dir, f"betfair_markets_{match_id}.json")
         with open(cached_file, 'w', encoding='utf-8') as f:
             json.dump(markets_data, f, indent=2, ensure_ascii=False)
 
@@ -375,9 +399,9 @@ class Betfair():
             return []
 
         # cache market response
-        cached_dir = os.path.join(os.path.dirname(__file__), "..", "cached")
-        os.makedirs(cached_dir, exist_ok=True)
-        cached_file = os.path.join(cached_dir, f"betfair_market_{market_id}.json")
+        cache_dir = os.path.join(os.path.dirname(__file__), "..", "cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        cached_file = os.path.join(cache_dir, f"betfair_market_{market_id}.json")
         with open(cached_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
