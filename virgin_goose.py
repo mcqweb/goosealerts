@@ -1,6 +1,7 @@
 import os, sys, time, json, requests, shutil
 from dotenv import load_dotenv
 import pytz
+import traceback
 from datetime import datetime, timedelta, timezone
 import cloudscraper
 from collections import defaultdict
@@ -74,70 +75,6 @@ KEY_FILE = os.getenv("KEY_FILE", "")
 # Backwards-compatible variable: may point to a directory or a single pem file
 CERTS_DIR  = os.getenv("CERTS_DIR", "certs")
 
-
-def _resolve_certs():
-    """Return a value suitable for passing to requests/betfairlightweight `certs`.
-
-    Possible return values:
-      - (cert_file, key_file) tuple
-      - single string path to combined PEM file
-      - None if no usable certs found
-    """
-    # Resolve to absolute paths to avoid platform-dependent issues
-    try:
-        cert_file = os.path.abspath(CERT_FILE) if CERT_FILE else ""
-    except Exception:
-        cert_file = CERT_FILE
-    try:
-        key_file = os.path.abspath(KEY_FILE) if KEY_FILE else ""
-    except Exception:
-        key_file = KEY_FILE
-
-    # 1) explicit cert + key
-    try:
-        # If values are relative, resolve against the project BASE_DIR
-        if cert_file and not os.path.isabs(cert_file):
-            cert_file = os.path.abspath(os.path.join(BASE_DIR, cert_file))
-        if key_file and not os.path.isabs(key_file):
-            key_file = os.path.abspath(os.path.join(BASE_DIR, key_file))
-
-        if cert_file and key_file and os.path.exists(cert_file) and os.path.exists(key_file):
-            return (cert_file, key_file)
-        elif CERT_FILE or KEY_FILE:
-            print(f"[WARN] CERT_FILE/KEY_FILE set but files not found: {CERT_FILE}, {KEY_FILE}", flush=True)
-    except OSError as e:
-        print(f"[WARN] Filesystem error checking CERT_FILE/KEY_FILE: {e}", flush=True)
-
-    # 2) CERTS_DIR may be a file (combined PEM) or directory
-    try:
-        cds = CERTS_DIR or ""
-        # If CERTS_DIR is relative, resolve against BASE_DIR
-        if cds and not os.path.isabs(cds):
-            cds = os.path.abspath(os.path.join(BASE_DIR, cds))
-    except Exception:
-        cds = CERTS_DIR
-
-    try:
-        if cds and os.path.isfile(cds):
-            return cds
-    except OSError as e:
-        print(f"[WARN] Filesystem error checking CERTS_DIR file: {e}", flush=True)
-
-    # 3) CERTS_DIR may be a directory containing common filenames
-    try:
-        if cds and os.path.isdir(cds):
-            for name in ("client.pem", "client-2048.pem", "client-2048.crt", "client.pem"):
-                p = os.path.join(cds, name)
-                try:
-                    if os.path.isfile(p):
-                        return p
-                except OSError:
-                    # skip problematic entries
-                    continue
-    except OSError as e:
-        print(f"[WARN] Filesystem error checking CERTS_DIR directory: {e}", flush=True)
-
-    return None
 STATE_FILE = "state/goose_alert_state.json"
 # ========= CONFIG =========
 GBP_THRESHOLD_GOOSE  = float(os.getenv("GBP_THRESHOLD_GOOSE", "10"))
@@ -748,19 +685,11 @@ def discover_markets(trading, competition_ids):
 
 # ========= MAIN LOOP =========
 def main():
-    # Resolve certs to pass to the API client. This supports either a
-    # (cert, key) tuple or a single combined PEM path.
-    certs_arg = _resolve_certs()
-    if certs_arg is None:
-        print(f"[WARN] No usable Betfair client certificate found. CERTS_DIR={CERTS_DIR} CERT_FILE={CERT_FILE}", flush=True)
-    else:
-        print(f"[INFO] Using certs for API client: {certs_arg}", flush=True)
-
     trading = betfairlightweight.APIClient(
         username=USERNAME,
         password=PASSWORD,
         app_key=APP_KEY,
-        certs=certs_arg,
+        certs=CERTS_DIR,
     )
     _login_or_die(trading)
 
