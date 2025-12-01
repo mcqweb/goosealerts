@@ -68,6 +68,7 @@ GBP_THRESHOLD_GOOSE  = float(os.getenv("GBP_THRESHOLD_GOOSE", "10"))
 GOOSE_MIN_ODDS      = float(os.getenv("GOOSE_MIN_ODDS", "1.2"))  # min odds for goose combos
 WINDOW_MINUTES   = int(os.getenv("WINDOW_MINUTES", "90"))    # KO window
 POLL_SECONDS      = int(os.getenv("POLL_SECONDS", "60"))    # How long should each loop wait
+VIRGIN_ODDS_CACHE_DURATION = int(os.getenv("VIRGIN_ODDS_CACHE_DURATION", "300"))  # seconds to cache AGS combo responses
 
 # ========= DISCORD =========
 def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=None, footer=None):
@@ -322,33 +323,71 @@ def getGoosedCombos(match, player_data, delay_seconds=0, ignore_lineup=False):
         "selectionGroups": [{"id": 10, "selections": [player_data['ga_id'], player_data['sot_id']]}],
         "betTypes": [{"type": "YOURBET"}]
     }
+    # Prepare cache — reuse recent responses to avoid hitting Virgin too often
+    cache_dir = os.path.join(BASE_DIR, 'cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    match_id = match.get('id') if isinstance(match, dict) else str(match)
+    ga_id = str(player_data.get('ga_id')) if player_data else 'unknown'
+    sot_id = str(player_data.get('sot_id')) if player_data else 'unknown'
+    cache_file = os.path.join(cache_dir, f"virgin_combo_{match_id}_{ga_id}_{sot_id}.json")
 
-    try:
-        scraper = cloudscraper.create_scraper()
-        resp = scraper.post(
-            'https://gateway.virginbet.com/sportsbook/gateway/v2/calculatebets?lang=en-gb',
-            proxies=PROXIES,
-            headers=VIRGIN_HEADERS,
-            json=combo_payload,
-            timeout=15
-        )
-    except Exception as e:
-        print('Error making AGS combo request:', e)
-        return back_odds_results
+    body = None
+    # Try load cache
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            ts = float(cached.get('ts', 0))
+            if time.time() - ts <= VIRGIN_ODDS_CACHE_DURATION:
+                body = cached.get('body')
+                print("Using Cached Odds")
+        except Exception:
+            body = None
 
-    # Parse and validate JSON response
-    try:
-        body = resp.json()
-    except Exception as e:
-        # JSON parse error — surface response text for debugging
+    # If no fresh cache, make request and save response
+    if body is None:
+        try:
+            scraper = cloudscraper.create_scraper()
+            resp = scraper.post(
+                'https://gateway.virginbet.com/sportsbook/gateway/v2/calculatebets?lang=en-gb',
+                proxies=PROXIES,
+                headers=VIRGIN_HEADERS,
+                json=combo_payload,
+                timeout=15
+            )
+        except Exception as e:
+            print('Error making AGS combo request:', e)
+            return back_odds_results
+
+        # Parse and validate JSON response
+        try:
+            body = resp.json()
+        except Exception as e:
+            # JSON parse error — surface response text for debugging
+            text_snip = None
+            try:
+                text_snip = (resp.text or '')[:1000]
+            except Exception:
+                text_snip = '<no-body>'
+            print('Error parsing AGS combo JSON response:', e)
+            print('Response status:', getattr(resp, 'status_code', None), 'body_snippet:', text_snip)
+            return back_odds_results
+
+        # Save to cache (best-effort)
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump({'ts': time.time(), 'body': body}, f)
+        except Exception:
+            pass
+
         text_snip = None
         try:
             text_snip = (resp.text or '')[:1000]
         except Exception:
             text_snip = '<no-body>'
-        print('Error parsing AGS combo JSON response:', e)
-        print('Response status:', getattr(resp, 'status_code', None), 'body_snippet:', text_snip)
-        return back_odds_results
+            print('Error parsing AGS combo JSON response:', e)
+            print('Response status:', getattr(resp, 'status_code', None), 'body_snippet:', text_snip)
+            return back_odds_results
 
     # Ensure expected structure exists
     data_obj = body.get('data') if isinstance(body, dict) else None
