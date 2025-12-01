@@ -1,2 +1,7 @@
-# Add your project dependencies here, for example:
-# requests==2.31.0
+# Project dependencies required by `virgin_goose.py`
+requests
+cloudscraper
+python-dotenv
+pytz
+Unidecode
+betfairlightweight
