@@ -452,25 +452,63 @@ def map_betfair_to_virgin(betfair_id):
         return None
 
 # ========= STATE =========
-def load_state():
-    try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+def save_state(player_name, match_id):
+    """Mark (match_id, player_name) as alerted in the state file.
 
-def save_state(state):
+    State format:
+    {
+        "alerted": {
+            "{match_id}_{player_name}": "<iso-timestamp>",
+            ...
+        }
+    }
+    """
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    # Load existing state if present
+    state = {}
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                state = json.load(f) or {}
+    except Exception:
+        state = {}
+
+    alerted = state.get('alerted', {}) if isinstance(state, dict) else {}
+    key = f"{match_id}_{player_name}"
+    try:
+        alerted[key] = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        alerted[key] = time.time()
+    state['alerted'] = alerted
+
     tmp = STATE_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f)
     os.replace(tmp, STATE_FILE)
+
+def already_alerted(player_name, match_id):
+    # If the state file doesn't exist yet, nothing has been alerted.
+    try:
+        if not os.path.exists(STATE_FILE):
+            return False
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            state = json.load(f) or {}
+    except Exception:
+        # On any read/parse error treat as not alerted to avoid crashing the loop.
+        return False
+
+    alerted = state.get('alerted', {}) if isinstance(state, dict) else {}
+    key = f"{match_id}_{player_name}"
+    return key in alerted
 
 # ========= MAIN LOOP =========
 def main():
     betfair = Betfair()
     debug = betfair.debug_save
     active_comps = betfair.get_active_whitelisted_competitions()   
+    # Record the start date (London timezone). If the date changes during a run
+    # we exit so a daily cron can restart a fresh process.
+    run_start_date = datetime.now(london).date()
     for comp in active_comps:
         cid = comp.get('comp_id',0)
         cname = comp.get('comp_name')
@@ -483,6 +521,11 @@ def main():
             #No upcoming matches found for this competition
             continue
     while True:
+        # If the local date (Europe/London) has changed since the process started,
+        # exit so the cron job can restart a fresh run for the new day.
+        if datetime.now(london).date() != run_start_date:
+            print(f"Local date changed from {run_start_date} to {datetime.now(london).date()}; exiting for daily restart")
+            return
         for m in matches:
             mid = m.get('id')
             mname = m.get('name')
@@ -524,7 +567,9 @@ def main():
                                         if lay_size >= GBP_THRESHOLD_GOOSE:
                                             if price < GOOSE_MIN_ODDS:
                                                 continue
-
+                                            if already_alerted(pname,mid):
+                                                print(f"Already alerted for {pname} in match {mid}; skipping")
+                                                continue
                                             conv = map_betfair_to_virgin(mid)
                                             if not conv:
                                                 print(f"No mapping for Betfair {mid}; skipping this outcome")
@@ -533,8 +578,8 @@ def main():
                                             if not virgin_id:
                                                 print(f"Mapping for Betfair {mid} missing 'target_id': {conv}; skipping")
                                                 continue
-                                            print("Virgin ID:", virgin_id)
-                                            print("Player:", pname)
+                                            # print("Virgin ID:", virgin_id)
+                                            # print("Player:", pname)
                                             virgin_markets = getVirginMarkets(virgin_id)
                                             player_data = find_player_sot_and_ga_ids(virgin_markets, pname)
                                             if player_data:
@@ -548,11 +593,11 @@ def main():
                                                 if combo_odds:
                                                     if isinstance(combo_odds, list):
                                                         try:
-                                                            back_odds = combo_odds[0].get('odds')
+                                                            back_odds = combo_odds[0].get('odds',0)
                                                         except Exception:
                                                             print('Combo Odds (raw list):', combo_odds)
                                                     elif isinstance(combo_odds, dict):
-                                                        back_odds = combo_odds.get('odds')
+                                                        back_odds = combo_odds.get('odds',0)
                                                     else:
                                                         print('Combo Odds (raw):', combo_odds)
                                                     print(f"Player: {player_data['name']} | Back Odds: {back_odds} | Lay Odds: {price}")
@@ -577,7 +622,8 @@ def main():
                                                     if DISCORD_GOOSE_CHANNEL_ID:
                                                         #print("SENDING")
                                                         send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT")
-        
+                                                    save_state(pname,mid)
+        print("Sleeping...")
         time.sleep(POLL_SECONDS)
 
 if __name__ == "__main__":

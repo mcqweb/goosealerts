@@ -551,7 +551,7 @@ def main() -> None:
     if not active:
         print("No active whitelisted competitions found (check data/competitions_whitelist.csv)")
         return
-
+    exit()
     print('\nMatches for active whitelisted competitions:')
     for comp in active:
         cid = comp.get('comp_id')
