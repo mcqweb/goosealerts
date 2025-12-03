@@ -14,6 +14,7 @@ import urllib.error
 import urllib.parse
 from types import SimpleNamespace
 from betfair import Betfair
+from oc import get_oddschecker_match_slug, get_oddschecker_odds
 
 # ========= INITIALIZATION =========
 
@@ -76,6 +77,7 @@ NORD_LOCATION = os.getenv("NORD_LOCATION", "")
 
 DISCORD_BOT_TOKEN   = os.getenv("DISCORD_BOT_TOKEN", "")
 DISCORD_GOOSE_CHANNEL_ID = os.getenv("DISCORD_GOOSE_CHANNEL_ID", "").strip()  # separate channel for goose alerts
+DISCORD_ARB_CHANNEL_ID   = os.getenv("DISCORD_ARB_CHANNEL_ID", "").strip()      # separate channel for arbitrage alerts
 DISCORD_ENABLED     = os.getenv("DISCORD_ENABLED", "1") == "1"      # enable/disable posting
 
 if NORD_USER and NORD_PWD and NORD_LOCATION:
@@ -88,9 +90,11 @@ else:
 #FOR DEBUGGING/TESTING
 TEST_PRICE_OFFSET = float(os.getenv("TEST_PRICE_OFFSET", "0"))
 
-STATE_FILE = "state/goose_alert_state.json"
+GOOSE_STATE_FILE = "state/goose_alert_state.json"
+ARB_STATE_FILE = "state/arb_alert_state.json"
 # ========= CONFIG =========
 GBP_THRESHOLD_GOOSE  = float(os.getenv("GBP_THRESHOLD_GOOSE", "10"))
+GBP_ARB_THRESHOLD = float(os.getenv("GBP_ARB_THRESHOLD", "10"))
 GOOSE_MIN_ODDS      = float(os.getenv("GOOSE_MIN_ODDS", "1.2"))  # min odds for goose combos
 WINDOW_MINUTES   = int(os.getenv("WINDOW_MINUTES", "90"))    # KO window
 POLL_SECONDS      = int(os.getenv("POLL_SECONDS", "60"))    # How long should each loop wait
@@ -478,7 +482,7 @@ def map_betfair_to_virgin(betfair_id):
         return None
 
 # ========= STATE =========
-def save_state(player_name, match_id):
+def save_state(player_name, match_id,file):
     """Mark (match_id, player_name) as alerted in the state file.
 
     State format:
@@ -489,12 +493,12 @@ def save_state(player_name, match_id):
         }
     }
     """
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    os.makedirs(os.path.dirname(file), exist_ok=True)
     # Load existing state if present
     state = {}
     try:
-        if os.path.exists(STATE_FILE):
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
+        if os.path.exists(file):
+            with open(file, "r", encoding="utf-8") as f:
                 state = json.load(f) or {}
     except Exception:
         state = {}
@@ -507,17 +511,17 @@ def save_state(player_name, match_id):
         alerted[key] = time.time()
     state['alerted'] = alerted
 
-    tmp = STATE_FILE + ".tmp"
+    tmp = file + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f)
-    os.replace(tmp, STATE_FILE)
+    os.replace(tmp, file)
 
-def already_alerted(player_name, match_id):
+def already_alerted(player_name, match_id, file):
     # If the state file doesn't exist yet, nothing has been alerted.
     try:
-        if not os.path.exists(STATE_FILE):
+        if not os.path.exists(file):
             return False
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
+        with open(file, "r", encoding="utf-8") as f:
             state = json.load(f) or {}
     except Exception:
         # On any read/parse error treat as not alerted to avoid crashing the loop.
@@ -577,8 +581,11 @@ def main():
                                 desc = node.get('description', {}) if isinstance(node, dict) else {}
                                 mtype = desc.get('marketType') or node.get('marketType') or ''
                                 midid = node.get('marketId') or node.get('market_id') or node.get('marketId')
-                                if mtype == betfair.AGS_MARKET_NAME and midid:
-                                    supported[mtype] = {'market_id': midid, 'market_name': desc.get('marketName', ''), 'internal_market_name': 'AGS'}
+                                if (mtype == betfair.FGS_MARKET_NAME or mtype == betfair.AGS_MARKET_NAME) and midid:
+                                    if mtype == betfair.FGS_MARKET_NAME:    
+                                        supported[mtype] = {'market_id': midid, 'market_name': desc.get('marketName', ''), 'internal_market_name': 'FGS'}
+                                    else:
+                                        supported[mtype] = {'market_id': midid, 'market_name': desc.get('marketName', ''), 'internal_market_name': 'AGS'}
                                     # call _fetch_market_odds for this market id
                                     try:
                                         odds = betfair._fetch_market_odds(str(midid), supported, m)
@@ -591,65 +598,105 @@ def main():
                                             price = o.get('odds',0)
                                             lay_size = float(o.get('size', 0))
                                             mkt = o.get('market') or o.get('market_type')
-                                            if lay_size >= GBP_THRESHOLD_GOOSE:
+                                            if mtype == betfair.AGS_MARKET_NAME and lay_size >= GBP_THRESHOLD_GOOSE:
+                                                skip = False
                                                 if price < GOOSE_MIN_ODDS:
-                                                    continue
-                                                if already_alerted(pname,mid):
+                                                    skip = True
+                                                if already_alerted(pname,mid,GOOSE_STATE_FILE):
                                                     print(f"Already alerted for {pname} in match {mid}; skipping")
-                                                    continue
+                                                    skip = True
                                                 conv = map_betfair_to_virgin(mid)
                                                 if not conv:
                                                     print(f"No mapping for Betfair {mid}; skipping this outcome")
-                                                    continue
+                                                    skip = True
                                                 virgin_id = conv.get('target_id')
                                                 if not virgin_id:
                                                     print(f"Mapping for Betfair {mid} missing 'target_id': {conv}; skipping")
-                                                    continue
+                                                    skip = True
                                                 # print("Virgin ID:", virgin_id)
                                                 # print("Player:", pname)
-                                                virgin_markets = getVirginMarkets(virgin_id)
-                                                player_data = find_player_sot_and_ga_ids(virgin_markets, pname)
-                                                if player_data:
-                                                    combo_odds = getGoosedCombos({'id': virgin_id}, player_data)  
-                                                    '''
-                                                    [{'match_id': 'SBTE_2_1024825599', 'player_name': 'Morgan Gibbs-White', 'odds': 2.23, 'bet_type': 'AGS', 'bet_request_json': {'selections': [{'id': 'SBTS_2_3950170697', 'eachWay': False}, {'id': 'SBTS_2_3950170555', 'eachWay': False}], 'oddsFormat': 'DECIMAL', 'selectionGroups': [{'id': 10, 'selections': ['SBTS_2_3950170697', 'SBTS_2_3950170555']}], 'betTypes': [{'type': 'YOURBET'}]}, 'updated_at': '2025-11-27T11:26:20.755707+00:00'}]
-                                                    '''
-                                                    # `getGoosedCombos` returns a list of result dicts.
-                                                    # Safely handle that shape and print the odds from the first result.
-                                                    
-                                                    if combo_odds:
-                                                        if isinstance(combo_odds, list):
-                                                            try:
-                                                                back_odds = combo_odds[0].get('odds',0)
-                                                            except Exception:
-                                                                print('Combo Odds (raw list):', combo_odds)
-                                                        elif isinstance(combo_odds, dict):
-                                                            back_odds = combo_odds.get('odds',0)
+                                                if not skip:
+                                                    virgin_markets = getVirginMarkets(virgin_id)
+                                                    player_data = find_player_sot_and_ga_ids(virgin_markets, pname)
+                                                    if player_data:
+                                                        combo_odds = getGoosedCombos({'id': virgin_id}, player_data)  
+                                                        '''
+                                                        [{'match_id': 'SBTE_2_1024825599', 'player_name': 'Morgan Gibbs-White', 'odds': 2.23, 'bet_type': 'AGS', 'bet_request_json': {'selections': [{'id': 'SBTS_2_3950170697', 'eachWay': False}, {'id': 'SBTS_2_3950170555', 'eachWay': False}], 'oddsFormat': 'DECIMAL', 'selectionGroups': [{'id': 10, 'selections': ['SBTS_2_3950170697', 'SBTS_2_3950170555']}], 'betTypes': [{'type': 'YOURBET'}]}, 'updated_at': '2025-11-27T11:26:20.755707+00:00'}]
+                                                        '''
+                                                        # `getGoosedCombos` returns a list of result dicts.
+                                                        # Safely handle that shape and print the odds from the first result.
+                                                        
+                                                        if combo_odds:
+                                                            if isinstance(combo_odds, list):
+                                                                try:
+                                                                    back_odds = combo_odds[0].get('odds',0)
+                                                                except Exception:
+                                                                    print('Combo Odds (raw list):', combo_odds)
+                                                            elif isinstance(combo_odds, dict):
+                                                                back_odds = combo_odds.get('odds',0)
+                                                            else:
+                                                                print('Combo Odds (raw):', combo_odds)
+                                                            print(f"Player: {player_data['name']} | Back Odds: {back_odds} | Lay Odds: {price}")
                                                         else:
-                                                            print('Combo Odds (raw):', combo_odds)
-                                                        print(f"Player: {player_data['name']} | Back Odds: {back_odds} | Lay Odds: {price}")
-                                                    else:
-                                                        print('Combo Odds: no result')
-                                                    if (back_odds+TEST_PRICE_OFFSET) > price:
-                                                        rating = round(back_odds / price * 100, 2)
-                                                        title = f"{pname} - {back_odds}/{price} ({rating}%)"
-                                                        desc = f"**{mname}** ({ko_str})\n{cname}\n\n£{int(lay_size)} available to [lay at {price}](https://www.betfair.com/exchange/plus/football/market/{mid})"
-                                                        #There is an arb here
+                                                            print('Combo Odds: no result')
+                                                        if (back_odds+TEST_PRICE_OFFSET) > price:
+                                                            rating = round(back_odds / price * 100, 2)
+                                                            title = f"{pname} - {back_odds}/{price} ({rating}%)"
+                                                            desc = f"**{mname}** ({ko_str})\n{cname}\n\n£{int(lay_size)} available to [lay at {price}](https://www.betfair.com/exchange/plus/football/market/{mid})"
+                                                            #There is an arb here
 
-                                                        '''
-                                                            [{'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.6, 'bookie': 'Bet365'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Boylesports'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'Coral'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.4, 'bookie': 'Betfred'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'Ladbrokes'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Paddy Power'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'QuinnBet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Sky Bet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Unibet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Bet Victor'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.75, 'bookie': 'William Hill'}]
-                                                        '''
-                            
+                                                            '''
+                                                                [{'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.6, 'bookie': 'Bet365'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Boylesports'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'Coral'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.4, 'bookie': 'Betfred'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'Ladbrokes'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Paddy Power'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.9, 'bookie': 'QuinnBet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Sky Bet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Unibet'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 4.0, 'bookie': 'Bet Victor'}, {'bettype': 'Anytime Goalscorer', 'outcome': 'Lee Angol', 'odds': 3.75, 'bookie': 'William Hill'}]
+                                                            '''
+                                
 
-                                                        fields = [
-                                                        ]
-                                                                                
-                                                        embed_colour = 0xFF0000  # bright red for true arb
-                                                        #print("ARBING")
-                                                        if DISCORD_GOOSE_CHANNEL_ID:
-                                                            #print("SENDING")
-                                                            send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT")
-                                                        save_state(pname,mid)
+                                                            fields = [
+                                                            ]
+                                                                                    
+                                                            embed_colour = 0xFF0000  # bright red for true arb
+                                                            #print("ARBING")
+                                                            if DISCORD_GOOSE_CHANNEL_ID:
+                                                                #print("SENDING")
+                                                                send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT")
+                                                            save_state(pname,mid, GOOSE_STATE_FILE)
+                                            if lay_size > GBP_ARB_THRESHOLD:
+                                                
+                                                if already_alerted(pname,mid,ARB_STATE_FILE):
+                                                    print(f"Already alerted for {pname} in match {mid}; skipping")
+                                                    continue
+                                                # GET OC RESULTS
+                                                oc_results = []
+                                                match_slug = None
+                                                match_slug = get_oddschecker_match_slug(mid)
+                                                if not match_slug:
+                                                    raise Exception("Could not map Betfair ID to OddsChecker slug")
+                                                # BUILD THE JSON FOR THIS BET ['First Goalscorer','Anytime Goalscorer']
+                                                if mtype == betfair.FGS_MARKET_NAME:
+                                                    bettype = "First Goalscorer"
+                                                    label = "FGS"
+                                                elif mtype == betfair.AGS_MARKET_NAME:
+                                                    bettype = "Anytime Goalscorer"
+                                                    label = "AGS"
+                                                betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
+                                                arb_opportunities = get_oddschecker_odds(match_slug, betfair_lay_bet)
+
+                                                # Send separate arbitrage message if configured
+                                                if arb_opportunities and DISCORD_ARB_CHANNEL_ID:
+                                                    # Calculate max OddsChecker odds for title
+                                                    max_oc_odds = max(arb['odds'] for arb in arb_opportunities) if arb_opportunities else 0
+                                                    rating_pct = (max_oc_odds / price * 100)
+                                                    arb_title = f"{pname} ({label}) - {max_oc_odds:.2f}/{price:.2f} ({rating_pct:.1f}%)"
+                                                    arb_fields = [
+                                                        ("Back Sites", "\n".join([f"{arb['bookie']} @ {arb['odds']:.2f}" for arb in arb_opportunities])),
+                                                        ("BFEX Link", f"[Open Market](https://www.betfair.com/exchange/plus/football/market/{mid})"),
+                                                    ]
+                                                    desc = f"**{mname}** ({ko_str})\n{cname}\n\n£{int(lay_size)} available to [lay at {price}](https://www.betfair.com/exchange/plus/football/market/{mid})"
+                                                            
+                                                    if match_slug:
+                                                        arb_fields.append(("OC Link", f"[View OC](https://www.oddschecker.com/football/{match_slug})"))
+                                                    if DISCORD_ARB_CHANNEL_ID:
+                                                        send_discord_embed(arb_title, desc, arb_fields, colour=0xFFB80C, channel_id=DISCORD_ARB_CHANNEL_ID)
+                                                    save_state(f"{pname}_{label}",mid, ARB_STATE_FILE)
         print("Sleeping...")
         time.sleep(POLL_SECONDS)
 

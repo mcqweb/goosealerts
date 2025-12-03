@@ -61,6 +61,7 @@ class Betfair():
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0"
         }
         self.AGS_MARKET_NAME = "TO_SCORE"
+        self.FGS_MARKET_NAME = "FIRST_GOAL_SCORER"
         # ensure the whitelist CSV exists (header written) so callers see the file immediately
         try:
             self.ensure_whitelist_exists()
@@ -286,7 +287,7 @@ class Betfair():
             market_type = market_data.get('marketType')
             
             # Check if the market belongs to one of the future events and is the 'TO_SCORE' type
-            if market_event_id in future_event_ids and market_type == self.AGS_MARKET_NAME:
+            if market_event_id in future_event_ids and (market_type == self.AGS_MARKET_NAME or market_type == self.FGS_MARKET_NAME):
                 # Collect the market node. Since you want it as 'market_nodes', 
                 # and you're looking for one specific market, we'll store it as a list 
                 # for consistency with the original structure.
@@ -362,6 +363,12 @@ class Betfair():
                             'market_id': market_id,
                             'market_name': desc.get('marketName', ''),
                             'internal_market_name': "AGS"
+                        }
+                    if market_type == self.FGS_MARKET_NAME:
+                        supported_markets[market_type] = {
+                            'market_id': market_id,
+                            'market_name': desc.get('marketName', ''),
+                            'internal_market_name': "FGS"
                         }
 
         if not supported_markets:
@@ -614,7 +621,7 @@ def main() -> None:
                                     desc = node.get('description', {}) if isinstance(node, dict) else {}
                                     mtype = desc.get('marketType') or node.get('marketType') or ''
                                     midid = node.get('marketId') or node.get('market_id') or node.get('marketId')
-                                    if mtype == wf.AGS_MARKET_NAME and midid:
+                                    if (mtype == wf.FGS_MARKET_NAME or mtype == wf.AGS_MARKET_NAME) and midid:
                                         supported[mtype] = {'market_id': midid, 'market_name': desc.get('marketName', ''), 'internal_market_name': 'AGS'}
                                         # call _fetch_market_odds for this market id
                                         try:

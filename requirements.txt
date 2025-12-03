@@ -5,3 +5,4 @@ python-dotenv
 pytz
 Unidecode
 betfairlightweight
+beautifulsoup4
