@@ -362,6 +362,7 @@ def getGoosedCombos(match, player_data, delay_seconds=0, ignore_lineup=False):
     cache_file = os.path.join(cache_dir, f"virgin_combo_{match_id}_{ga_id}_{sot_id}.json")
 
     body = None
+    resp = None  # Initialize resp to None so we can check if it was set
     # Try load cache
     if os.path.exists(cache_file):
         try:
@@ -410,27 +411,16 @@ def getGoosedCombos(match, player_data, delay_seconds=0, ignore_lineup=False):
         except Exception:
             pass
 
-        text_snip = None
-        try:
-            text_snip = (resp.text or '')[:1000]
-        except Exception:
-            text_snip = '<no-body>'
-            print('Error parsing AGS combo JSON response:', e)
-            print('Response status:', getattr(resp, 'status_code', None), 'body_snippet:', text_snip)
-            return back_odds_results
-
     # Ensure expected structure exists
     data_obj = body.get('data') if isinstance(body, dict) else None
     if not data_obj:
-        print('AGS combo response missing "data" key. Status:', getattr(resp, 'status_code', None))
+        status_hint = getattr(resp, 'status_code', 'unknown') if resp else 'cached'
+        print(f'AGS combo response missing "data" key. Source: {status_hint}')
         # show a short snippet to help debugging
         try:
             print('Response snippet:', json.dumps(body)[:800])
         except Exception:
-            try:
-                print('Response text snippet:', (resp.text or '')[:800])
-            except Exception:
-                pass
+            pass
         return back_odds_results
 
     bet_details = data_obj.get('betDetails') if isinstance(data_obj, dict) else None
