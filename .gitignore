@@ -39,3 +39,7 @@ debug/
 cache/
 state/
 data/
+extracted_markets_data.json
+oddschecker_market_page.html
+whale_oc_web_fallback.json
+whale_oc.json

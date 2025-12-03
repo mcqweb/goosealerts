@@ -516,7 +516,7 @@ def save_state(player_name, match_id,file):
         json.dump(state, f)
     os.replace(tmp, file)
 
-def already_alerted(player_name, match_id, file):
+def already_alerted(player_name, match_id, file, market=None):
     # If the state file doesn't exist yet, nothing has been alerted.
     try:
         if not os.path.exists(file):
@@ -529,6 +529,8 @@ def already_alerted(player_name, match_id, file):
 
     alerted = state.get('alerted', {}) if isinstance(state, dict) else {}
     key = f"{match_id}_{player_name}"
+    if market:
+        key = f"{key}_{market}"
     return key in alerted
 
 # ========= MAIN LOOP =========
@@ -660,8 +662,14 @@ def main():
                                                                 send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT")
                                                             save_state(pname,mid, GOOSE_STATE_FILE)
                                             if lay_size > GBP_ARB_THRESHOLD:
-                                                
-                                                if already_alerted(pname,mid,ARB_STATE_FILE):
+                                                if mtype == betfair.FGS_MARKET_NAME:
+                                                    bettype = "First Goalscorer"
+                                                    label = "FGS"
+                                                    print("There is a FGS match")
+                                                elif mtype == betfair.AGS_MARKET_NAME:
+                                                    bettype = "Anytime Goalscorer"
+                                                    label = "AGS"
+                                                if already_alerted(pname,mid,ARB_STATE_FILE, market=label):
                                                     print(f"Already alerted for {pname} in match {mid}; skipping")
                                                     continue
                                                 # GET OC RESULTS
@@ -671,12 +679,7 @@ def main():
                                                 if not match_slug:
                                                     raise Exception("Could not map Betfair ID to OddsChecker slug")
                                                 # BUILD THE JSON FOR THIS BET ['First Goalscorer','Anytime Goalscorer']
-                                                if mtype == betfair.FGS_MARKET_NAME:
-                                                    bettype = "First Goalscorer"
-                                                    label = "FGS"
-                                                elif mtype == betfair.AGS_MARKET_NAME:
-                                                    bettype = "Anytime Goalscorer"
-                                                    label = "AGS"
+
                                                 betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
                                                 arb_opportunities = get_oddschecker_odds(match_slug, betfair_lay_bet)
 
