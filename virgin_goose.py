@@ -824,14 +824,11 @@ def main():
                                                     continue
                                                 
                                                 if already_alerted(pname, wh_match_id, WH_STATE_FILE, market=label):
-                                                    print(f"Already alerted for {pname} in match {wh_match_id}; skipping")
                                                     continue
                                                 
                                                 # GET WILLIAM HILL BB ODDS HERE
                                                 betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
                                                 try:
-                                                    print(f"Fetching WH odds for {pname} ({bettype}) in match {wh_match_id}...")
-                                                    
                                                     combos = wh_client.get_player_combinations(
                                                         player_name=pname,
                                                         template_name=bettype,
@@ -839,41 +836,32 @@ def main():
                                                     )
                                                     
                                                     if not combos:
-                                                        print(f"No combinations found for {pname}")
                                                         continue
                                                     
                                                     combo = combos[0]
                                                     if not combo.get('success'):
-                                                        print(f"Invalid combination: {combo}")
                                                         continue
                                                     
-                                                    print(f"Combo generated successfully, fetching price...")
                                                     price_data = wh_client.get_combination_price(combo)
                                                     
                                                     if price_data and price_data.get('success'):
                                                         wh_odds = price_data.get('odds',0)
-                                                        print(f"WH Odds for {pname}: {wh_odds}")
                                                         
                                                         if float(wh_odds) >= 4:
                                                             # Boosting odds by 25%
-                                                            wh_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)  
-                                                            print(f"  Boosted to : {wh_odds}") 
+                                                            wh_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
                                                         
                                                         # Send separate WH message if configured
                                                         if DISCORD_WH_CHANNEL_ID:
                                                             if wh_odds >= float(betfair_lay_bet[0]['lay_odds']):
-                                                                discord_start = time.time()
                                                                 rating = round(wh_odds / price * 100, 2)
                                                                 title = f"{pname} - {label} - {wh_odds}/{price} ({rating}%)"
                                                                 desc = f"**{mname}** ({ko_str})\n{cname}\n\n£{int(lay_size)} available to [lay at {price}](https://www.betfair.com/exchange/plus/football/market/{mid})"
                                                                 fields = []
                                                                 send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID)
                                                                 save_state(f"{pname}_{label}", wh_match_id, WH_STATE_FILE)
-                                                                discord_time = time.time() - discord_start
-                                                                print(f"[TIMING] Discord alert sent in {discord_time:.2f}s")
-                                                        # TODO: Compare with Betfair lay odds and send Discord alert if profitable
+                                                                print(f"[WH ALERT] {pname} {label} @ {wh_odds} (rating: {rating}%)")
                                                     else:
-                                                        print(f"Failed to get price: {price_data}")
                                                         continue
                                                             
                                                 except Exception as e:

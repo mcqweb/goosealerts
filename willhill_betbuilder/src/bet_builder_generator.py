@@ -151,17 +151,9 @@ class BetBuilderGenerator:
                 ts = float(cached.get('ts', 0))
                 if time.time() - ts <= self.WH_PRICE_CACHE_DURATION:
                     # Cache is still valid
-                    elapsed = timing_module.time() - start
-                    print(f"[CACHE HIT] Loaded WH price from cache in {elapsed:.3f}s")
                     return cached.get('response')
-                else:
-                    age = time.time() - ts
-                    print(f"[CACHE EXPIRED] Cache age: {age:.1f}s (limit: {self.WH_PRICE_CACHE_DURATION}s)")
-            except Exception as e:
-                print(f"[CACHE ERROR] Failed to read cache: {e}")
+            except Exception:
                 pass  # If cache read fails, continue to API request
-        else:
-            print(f"[CACHE MISS] No cache file: {cache_file.name}")
         
         # Make API request
         api_start = timing_module.time()
@@ -188,9 +180,6 @@ class BetBuilderGenerator:
             )
             response.raise_for_status()
             response_data = response.json()
-            
-            api_elapsed = timing_module.time() - api_start
-            print(f"[API REQUEST] WH pricing API took {api_elapsed:.3f}s")
             
             # Save to cache
             try:
@@ -219,14 +208,10 @@ class BetBuilderGenerator:
         """
         selections = self.parser.get_selections_for_market(category, period, team)
         
-        print(f"[DEBUG] Looking for '{selection_name}' in {team} {category}/{period}")
-        print(f"[DEBUG] Found {len(selections)} selections")
-        
         for selection in selections:
             sel_name = selection.get("name")
             # Try exact match first
             if sel_name == selection_name:
-                print(f"[EXACT MATCH] '{selection_name}' found in {team} {category}/{period}")
                 return selection.get("id")
         
         # If no exact match and this looks like a player market, try fuzzy matching
@@ -235,13 +220,7 @@ class BetBuilderGenerator:
             for selection in selections:
                 sel_name = selection.get("name")
                 if self._fuzzy_match_names(sel_name, selection_name):
-                    print(f"[FUZZY MATCH] '{selection_name}' matched to '{sel_name}' in {team} {category}/{period}")
                     return selection.get("id")
-            
-            # Show first few available selections for debugging
-            if selections:
-                sample_names = [s.get("name") for s in selections[:5]]
-                print(f"[DEBUG] Sample available selections: {sample_names}")
         
         return None
     

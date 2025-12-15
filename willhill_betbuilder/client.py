@@ -194,16 +194,11 @@ class BetBuilderClient:
         teams_to_try = [team] if team else self.get_teams()
         all_combos = []
         
-        print(f"[DEBUG] Looking for player '{player_name}' in teams: {teams_to_try}")
-        
         for team_name in teams_to_try:
             if template_name:
                 combo = self.generator.generate_combo_for_player(player_name, team_name, template_name)
                 if combo.get("success"):
-                    print(f"[DEBUG] Found valid combo for '{player_name}' in team '{team_name}'")
                     all_combos.append(combo)
-                else:
-                    print(f"[DEBUG] No valid combo for '{player_name}' in team '{team_name}': {combo.get('error', 'unknown error')}")
             else:
                 combos = self.generator.generate_all_combos_for_player(player_name, team_name)
                 all_combos.extend([c for c in combos if c.get("success")])
