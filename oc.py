@@ -15,6 +15,52 @@ except ImportError:
 # ========= DEBUG MODE =========
 DEBUG_MODE = os.getenv("DEBUG_MODE", "0") == "1"
 
+# ========= FUZZY NAME MATCHING =========
+def _fuzzy_match_names(name1: str, name2: str) -> bool:
+    """
+    Check if two player names are a fuzzy match.
+    Returns True if at least 2 out of 3 name parts match.
+    
+    Examples:
+        'Santos Matheus Cunha' vs 'Matheus Cunha' -> True (2/2 match)
+        'Junior Kroupi' vs 'Eli Junior Kroupi' -> True (2/3 match)
+        'Benjamin Sesko' vs 'Ben Sesko' -> True (1/2 match, 50%+)
+    
+    Args:
+        name1: First name to compare
+        name2: Second name to compare
+        
+    Returns:
+        True if names match closely enough
+    """
+    # Normalize: lowercase and split into parts
+    parts1 = set(name1.lower().split())
+    parts2 = set(name2.lower().split())
+    
+    # Remove very short parts (initials, etc.) that might cause false matches
+    parts1 = {p for p in parts1 if len(p) > 1}
+    parts2 = {p for p in parts2 if len(p) > 1}
+    
+    if not parts1 or not parts2:
+        return False
+    
+    # Count matching parts
+    matches = len(parts1 & parts2)
+    
+    # Calculate total unique parts (union)
+    total_parts = len(parts1 | parts2)
+    
+    if total_parts == 0:
+        return False
+    
+    # Need at least 2 matching parts, OR >50% match rate for shorter names
+    if matches >= 2:
+        return True
+    
+    # For shorter names (2 parts total), require at least 50% match
+    match_rate = matches / total_parts
+    return match_rate >= 0.5
+
 # ========= CACHE =========
 CACHE_DIR = './cache'
 CACHE_HTML_SUBDIR = 'html'
@@ -57,6 +103,10 @@ BOOKMAKER_MAPPING = {
     'G5': 'Bet Goodwin',
     'CUS': 'Casumo',
 }
+
+# ========= SLUG CACHE =========
+# In-memory cache for Betfair ID -> OddsChecker slug mappings
+_SLUG_CACHE = {}
 
 def _ensure_cache_dirs():
     """Create cache directories if they don't exist."""
@@ -131,11 +181,18 @@ def _read_cache_text(cache_path):
 def get_oddschecker_match_slug(betfair_id):
     """
     Convert Betfair match ID to OddsChecker page slug using the mapping API.
+    Uses in-memory cache to avoid repeated API calls for the same match.
+    
     betfair_id: Betfair match ID (can be string or dict)
     Returns: page_slug string (e.g., "english/premier-league/team-a-v-team-b") or None on failure
     """
     if isinstance(betfair_id, dict):
         betfair_id = next(iter(betfair_id.values()))
+    
+    # Check cache first
+    if betfair_id in _SLUG_CACHE:
+        _debug(f"[INFO] Using cached slug for Betfair {betfair_id}: {_SLUG_CACHE[betfair_id]}")
+        return _SLUG_CACHE[betfair_id]
     
     api_url = f'https://api.oddsmatcha.uk/convert/betfair_to_oddschecker?betfair_ids={betfair_id}'
     try:
@@ -149,6 +206,8 @@ def get_oddschecker_match_slug(betfair_id):
                 page_slug = first_item.get('page_slug')
                 if page_slug:
                     _debug(f"[INFO] Mapped Betfair {betfair_id} to OddsChecker slug: {page_slug}")
+                    # Cache the result
+                    _SLUG_CACHE[betfair_id] = page_slug
                     return page_slug
                 else:
                     print(f"[WARN] 'page_slug' not found in conversion response for Betfair {betfair_id}", flush=True)
@@ -236,8 +295,11 @@ def scrape_oddschecker_market_ids(match_slug):
                 headers=headers,
                 cookies=cookies
             )
-            if response.status_code != 200:
-                raise Exception(f"HTTP {response.status_code} fetching OddsChecker page")
+            if response.status_code == 404:
+                print(f"[INFO] No OddsChecker page found at {url} (404)", flush=True)
+                return None, None
+            elif response.status_code != 200:
+                raise Exception(f"HTTP {response.status_code} fetching OddsChecker page: {url}")
             html_content = response.text
             _debug(f"[INFO] Successfully fetched page with tls_client")
             
@@ -457,10 +519,19 @@ def get_oddschecker_odds(match_slug, betdata):
 
         # Find the betId for this outcome from the player mapping
         bet_id = None
+        # First try exact match
         for mapped_outcome, mapped_bet_id in player_bet_mapping.get(bettype, {}).items():
             if mapped_outcome.lower() == outcome.lower():
                 bet_id = mapped_bet_id
                 break
+        
+        # If no exact match, try fuzzy matching
+        if not bet_id:
+            for mapped_outcome, mapped_bet_id in player_bet_mapping.get(bettype, {}).items():
+                if _fuzzy_match_names(mapped_outcome, outcome):
+                    bet_id = mapped_bet_id
+                    print(f"[INFO] Fuzzy matched '{outcome}' to '{mapped_outcome}' for {bettype}", flush=True)
+                    break
         
         if not bet_id:
             print(f"[WARN] Could not find betId for {bettype} / {outcome}", flush=True)
