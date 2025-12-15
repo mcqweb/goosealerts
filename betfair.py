@@ -163,7 +163,8 @@ class Betfair():
                         "skipValues": 0,
                         "applyNextTo": 0,
                         "values": [
-                            "TO_SCORE"
+                            "TO_SCORE",
+                            "FIRST_GOAL_SCORER"
                         ],
                         "next": {
                             "type": "MARKET",
@@ -279,27 +280,27 @@ class Betfair():
         # Create a set of event IDs found in the first pass for quick lookup
         future_event_ids = {match['id'] for match in matches} 
         
-        # Store the TO_SCORE market for each event ID
-        event_to_score_markets = {}
+        # Store the goalscorer markets for each event ID (both AGS and FGS)
+        event_markets = {}
 
         for market_id, market_data in markets_data.items():
             market_event_id = str(market_data.get('eventId')) # Ensure comparison is with string ID
             market_type = market_data.get('marketType')
             
-            # Check if the market belongs to one of the future events and is the 'TO_SCORE' type
+            # Check if the market belongs to one of the future events and is AGS or FGS
             if market_event_id in future_event_ids and (market_type == self.AGS_MARKET_NAME or market_type == self.FGS_MARKET_NAME):
-                # Collect the market node. Since you want it as 'market_nodes', 
-                # and you're looking for one specific market, we'll store it as a list 
-                # for consistency with the original structure.
-                event_to_score_markets[market_event_id] = [market_data]
+                # Collect the market node - store as list to accommodate both AGS and FGS
+                if market_event_id not in event_markets:
+                    event_markets[market_event_id] = []
+                event_markets[market_event_id].append(market_data)
 
-        # 3. Final step: Update the 'matches' list with the 'TO_SCORE' market nodes
+        # 3. Final step: Update the 'matches' list with the goalscorer market nodes
         final_matches = []
         for match in matches:
             event_id = match['id']
-            # If we found the TO_SCORE market for this event, update the 'market_nodes' key
-            if event_id in event_to_score_markets:
-                match['market_nodes'] = event_to_score_markets[event_id]
+            # If we found goalscorer markets for this event, update the 'market_nodes' key
+            if event_id in event_markets:
+                match['market_nodes'] = event_markets[event_id]
                 final_matches.append(match) # Only keep matches that have the market
             
         return final_matches    

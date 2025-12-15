@@ -15,6 +15,8 @@ import urllib.parse
 from types import SimpleNamespace
 from betfair import Betfair
 from oc import get_oddschecker_match_slug, get_oddschecker_odds
+from willhill_betbuilder import get_odds, configure, BET_TYPES
+
 
 # ========= INITIALIZATION =========
 
@@ -78,6 +80,7 @@ NORD_LOCATION = os.getenv("NORD_LOCATION", "")
 DISCORD_BOT_TOKEN   = os.getenv("DISCORD_BOT_TOKEN", "")
 DISCORD_GOOSE_CHANNEL_ID = os.getenv("DISCORD_GOOSE_CHANNEL_ID", "").strip()  # separate channel for goose alerts
 DISCORD_ARB_CHANNEL_ID   = os.getenv("DISCORD_ARB_CHANNEL_ID", "").strip()      # separate channel for arbitrage alerts
+DISCORD_WH_CHANNEL_ID   = os.getenv("DISCORD_WH_CHANNEL_ID", "").strip()      # separate channel for William Hill BB alerts
 DISCORD_ENABLED     = os.getenv("DISCORD_ENABLED", "1") == "1"      # enable/disable posting
 
 if NORD_USER and NORD_PWD and NORD_LOCATION:
@@ -92,9 +95,12 @@ TEST_PRICE_OFFSET = float(os.getenv("TEST_PRICE_OFFSET", "0"))
 
 GOOSE_STATE_FILE = "state/goose_alert_state.json"
 ARB_STATE_FILE = "state/arb_alert_state.json"
+WH_STATE_FILE = "state/WH_alert_state.json"
+
 # ========= CONFIG =========
 GBP_THRESHOLD_GOOSE  = float(os.getenv("GBP_THRESHOLD_GOOSE", "10"))
 GBP_ARB_THRESHOLD = float(os.getenv("GBP_ARB_THRESHOLD", "10"))
+GBP_WH_THRESHOLD = float(os.getenv("GBP_WH_THRESHOLD", "10"))
 GOOSE_MIN_ODDS      = float(os.getenv("GOOSE_MIN_ODDS", "1.2"))  # min odds for goose combos
 WINDOW_MINUTES   = int(os.getenv("WINDOW_MINUTES", "90"))    # KO window
 POLL_SECONDS      = int(os.getenv("POLL_SECONDS", "60"))    # How long should each loop wait
@@ -354,12 +360,13 @@ def getGoosedCombos(match, player_data, delay_seconds=0, ignore_lineup=False):
         "betTypes": [{"type": "YOURBET"}]
     }
     # Prepare cache — reuse recent responses to avoid hitting Virgin too often
-    cache_dir = os.path.join(BASE_DIR, 'cache')
+    cache_dir = os.path.join(BASE_DIR, 'cache', 'virgin_prices')
     os.makedirs(cache_dir, exist_ok=True)
-    match_id = match.get('id') if isinstance(match, dict) else str(match)
-    ga_id = str(player_data.get('ga_id')) if player_data else 'unknown'
-    sot_id = str(player_data.get('sot_id')) if player_data else 'unknown'
-    cache_file = os.path.join(cache_dir, f"virgin_combo_{match_id}_{ga_id}_{sot_id}.json")
+    
+    # Generate cache key from sorted selection IDs (consistent with WH approach)
+    selection_ids = sorted([player_data['ga_id'], player_data['sot_id']])
+    cache_key = '_'.join(selection_ids)
+    cache_file = os.path.join(cache_dir, f"{cache_key}.json")
 
     body = None
     resp = None  # Initialize resp to None so we can check if it was set
@@ -371,7 +378,7 @@ def getGoosedCombos(match, player_data, delay_seconds=0, ignore_lineup=False):
             ts = float(cached.get('ts', 0))
             if time.time() - ts <= VIRGIN_ODDS_CACHE_DURATION:
                 body = cached.get('body')
-                print("Using Cached Odds")
+                # print("Using Cached Virgin Odds")
         except Exception:
             body = None
 
@@ -450,26 +457,88 @@ def getGoosedCombos(match, player_data, delay_seconds=0, ignore_lineup=False):
 
     return back_odds_results
    
-def map_betfair_to_virgin(betfair_id):
-    """Call the oddsmatcha API to map a Betfair match id to a VirginBet id.
+def map_betfair_to_sites(betfair_id, target_sites=None):
+    """Call the oddsmatcha API to map a Betfair match id to multiple target sites.
 
+    Args:
+        betfair_id: The Betfair match ID to convert
+        target_sites: List of target site names (e.g., ['virginbet', 'williamhill'])
+                     If None, defaults to ['virginbet', 'williamhill']
+
+    Returns:
+        Dictionary mapping site names to their IDs, e.g.:
+        {'virginbet': 'SBTE_2_1024825599', 'williamhill': 'OB_EV37926026'}
+        Returns empty dict if no conversions found.
+    """
+    if target_sites is None:
+        target_sites = ['virginbet', 'williamhill']
+    
+    result = {}
+    
+    for site in target_sites:
+        try:
+            api = f"https://api.oddsmatcha.uk/convert/site_to_site?source_site=betfair&source_match_ids={betfair_id}&target_site={site}"
+            resp = requests.get(api, timeout=10)
+            if not resp.ok:
+                print(f"Mapping API returned {resp.status_code} for Betfair {betfair_id} -> {site}")
+                continue
+            data = resp.json()
+            if data.get('success') and data.get('conversions'):
+                conv = data['conversions'][0]
+                target_id = conv.get('target_id')
+                if target_id:
+                    result[site] = target_id
+            else:
+                print(f"Mapping API returned no conversion for Betfair {betfair_id} -> {site}")
+        except Exception as e:
+            print(f"Error calling mapping API for Betfair {betfair_id} -> {site}: {e}")
+    
+    return result
+
+# Backward compatibility wrapper
+def map_betfair_to_virgin(betfair_id):
+    """Legacy wrapper for backward compatibility.
+    
     Returns the first conversion dict on success or None.
     """
+    mappings = map_betfair_to_sites(betfair_id, ['virginbet'])
+    if 'virginbet' in mappings:
+        return {'target_id': mappings['virginbet']}
+    return None
+
+def is_match_in_wh_offer(wh_match_id, offer_id=1):
+    """Check if a William Hill match ID is in the active offer.
+    
+    Args:
+        wh_match_id: The William Hill match ID to check (e.g., 'OB_EV37969778')
+        offer_id: The offer ID to check (defaults to 1 for WH 25% BB Boost)
+    
+    Returns:
+        True if the match is in the offer, False otherwise.
+    """
     try:
-        api = f"https://api.oddsmatcha.uk/convert/site_to_site?source_site=betfair&source_match_ids={betfair_id}&target_site=virginbet"
+        api = f"https://api.oddsmatcha.uk/offers/{offer_id}"
         resp = requests.get(api, timeout=10)
         if not resp.ok:
-            print(f"Mapping API returned {resp.status_code} for Betfair {betfair_id}")
-            return None
+            print(f"Offer API returned {resp.status_code} for offer {offer_id}")
+            return False
+        
         data = resp.json()
-        if data.get('success') and data.get('conversions'):
-            conv = data['conversions'][0]
-            return conv
-        print(f"Mapping API returned no conversion for Betfair {betfair_id}")
-        return None
+        matches = data.get('matches', [])
+        
+        # Check if wh_match_id is in any of the match mappings
+        for match in matches:
+            mappings = match.get('mappings', [])
+            for mapping in mappings:
+                if (mapping.get('site_name') == 'williamhill' and 
+                    mapping.get('site_match_id') == wh_match_id):
+                    return True
+        
+        return False
+        
     except Exception as e:
-        print(f"Error calling mapping API for Betfair {betfair_id}: {e}")
-        return None
+        print(f"Error checking WH offer for match {wh_match_id}: {e}")
+        return False
 
 # ========= STATE =========
 def save_state(player_name, match_id,file):
@@ -590,6 +659,7 @@ def main():
                                             price = o.get('odds',0)
                                             lay_size = float(o.get('size', 0))
                                             mkt = o.get('market') or o.get('market_type')
+                                            # GOOSE ALERTS
                                             if mtype == betfair.AGS_MARKET_NAME and lay_size >= GBP_THRESHOLD_GOOSE:
                                                 skip = False
                                                 if price < GOOSE_MIN_ODDS:
@@ -597,13 +667,10 @@ def main():
                                                 if already_alerted(pname,mid,GOOSE_STATE_FILE):
                                                     print(f"Already alerted for {pname} in match {mid}; skipping")
                                                     skip = True
-                                                conv = map_betfair_to_virgin(mid)
-                                                if not conv:
-                                                    print(f"No mapping for Betfair {mid}; skipping this outcome")
-                                                    skip = True
-                                                virgin_id = conv.get('target_id')
+                                                mappings = map_betfair_to_sites(mid, ['virginbet'])
+                                                virgin_id = mappings.get('virginbet')
                                                 if not virgin_id:
-                                                    print(f"Mapping for Betfair {mid} missing 'target_id': {conv}; skipping")
+                                                    print(f"No VirginBet mapping for Betfair {mid}; skipping this outcome")
                                                     skip = True
                                                 # print("Virgin ID:", virgin_id)
                                                 # print("Player:", pname)
@@ -651,6 +718,7 @@ def main():
                                                                 #print("SENDING")
                                                                 send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT")
                                                             save_state(pname,mid, GOOSE_STATE_FILE)
+                                            # ARB ALERTS
                                             if lay_size > GBP_ARB_THRESHOLD:
                                                 if mtype == betfair.FGS_MARKET_NAME:
                                                     bettype = "First Goalscorer"
@@ -690,6 +758,89 @@ def main():
                                                     if DISCORD_ARB_CHANNEL_ID:
                                                         send_discord_embed(arb_title, desc, arb_fields, colour=0xFFB80C, channel_id=DISCORD_ARB_CHANNEL_ID)
                                                     save_state(f"{pname}_{label}",mid, ARB_STATE_FILE)
+                                            # WILLIAM HILL ALERTS
+                                            # GET WH MATCH ID AND CHECK IT'S IN THE OFFER
+
+                                            #CHECK WE'RE ABOVE OUR MIN LAY SIZE
+                                            if lay_size > GBP_WH_THRESHOLD:
+                                                if mtype == betfair.FGS_MARKET_NAME:
+                                                    bettype = "First Goalscorer"
+                                                    label = "FGS"
+                                                    print("There is a FGS match")
+                                                elif mtype == betfair.AGS_MARKET_NAME:
+                                                    bettype = "Anytime Goalscorer"
+                                                    label = "AGS"
+                                                
+                                                # Get William Hill match ID
+                                                mappings = map_betfair_to_sites(mid, ['williamhill'])
+                                                will_hill_match_id = mappings.get('williamhill')
+                                                if not will_hill_match_id:
+                                                    print(f"No William Hill mapping for Betfair {mid}; skipping WH check")
+                                                    continue
+                                                
+                                                # Check if match is in the WH offer
+                                                if not is_match_in_wh_offer(will_hill_match_id):
+                                                    print(f"Match {will_hill_match_id} not in WH offer; skipping WH check")
+                                                    continue
+                                                
+                                                if already_alerted(pname,will_hill_match_id,WH_STATE_FILE, market=label):
+                                                    print(f"Already alerted for {pname} in match {will_hill_match_id}; skipping")
+                                                    continue
+                                                # GET WILLIAM HILL BB ODDS HERE
+                                                betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
+                                                try:
+                                                    from willhill_betbuilder import BetBuilderClient
+                                                    
+                                                    print(f"Fetching WH odds for {pname} ({bettype}) in match {will_hill_match_id}...")
+                                                    client = BetBuilderClient()
+                                                    
+                                                    if not client.load_event(will_hill_match_id):
+                                                        print(f"Failed to load event {will_hill_match_id}")
+                                                        continue
+                                                    
+                                                    combos = client.get_player_combinations(
+                                                        player_name=pname,
+                                                        template_name=bettype,
+                                                        get_price=False  # Get combo first without price
+                                                    )
+                                                    
+                                                    if not combos:
+                                                        print(f"No combinations found for {pname}")
+                                                        continue
+                                                    
+                                                    combo = combos[0]
+                                                    if not combo.get('success'):
+                                                        print(f"Invalid combination: {combo}")
+                                                        continue
+                                                    
+                                                    print(f"Combo generated successfully, fetching price...")
+                                                    price_data = client.get_combination_price(combo)
+                                                    
+                                                    if price_data and price_data.get('success'):
+                                                        wh_odds = price_data.get('odds',0)
+                                                        print(f"WH Odds for {pname}: {wh_odds}")
+                                                        # TODO: Compare with Betfair lay odds and send Discord alert if profitable
+                                                    else:
+                                                        print(f"Failed to get price: {price_data}")
+                                                        continue
+                                                            
+                                                except Exception as e:
+                                                    print(f"Error getting WH odds: {e}")
+                                                    traceback.print_exc()
+                                                    continue
+                                                if float(wh_odds) >= 4:
+                                                    # Boosting odds by 25%
+                                                    wh_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)  
+                                                    print(f"  Boosted to : {wh_odds}") 
+                                                # Send separate WH message if configured
+                                                if DISCORD_WH_CHANNEL_ID:
+                                                    if wh_odds >= float(betfair_lay_bet[0]['lay_odds']):
+                                                        rating = round(back_odds / price * 100, 2)
+                                                        title = f"{pname} - {back_odds}/{price} ({rating}%)"
+                                                        desc = f"**{mname}** ({ko_str})\n{cname}\n\n£{int(lay_size)} available to [lay at {price}](https://www.betfair.com/exchange/plus/football/market/{mid})"
+                                                        fields = []
+                                                        send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID)
+                                                        save_state(f"{pname}_{label}",mid, WH_STATE_FILE)                                                    
         print("Sleeping...")
         time.sleep(POLL_SECONDS)
 

@@ -43,3 +43,7 @@ extracted_markets_data.json
 oddschecker_market_page.html
 whale_oc_web_fallback.json
 whale_oc.json
+willhill_betbuilder/all_combos_with_payloads.json
+willhill_betbuilder/all_combos.json
+willhill_betbuilder/config.example.json
+willhill_betbuilder/config.py
