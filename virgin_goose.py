@@ -105,6 +105,12 @@ GOOSE_MIN_ODDS      = float(os.getenv("GOOSE_MIN_ODDS", "1.2"))  # min odds for 
 WINDOW_MINUTES   = int(os.getenv("WINDOW_MINUTES", "90"))    # KO window
 POLL_SECONDS      = int(os.getenv("POLL_SECONDS", "60"))    # How long should each loop wait
 VIRGIN_ODDS_CACHE_DURATION = int(os.getenv("VIRGIN_ODDS_CACHE_DURATION", "300"))  # seconds to cache AGS combo responses
+VERBOSE_TIMING = os.getenv("VERBOSE_TIMING", "0") == "1"  # Enable detailed timing logs
+
+# Feature flags - enable/disable specific integrations
+ENABLE_VIRGIN_GOOSE = os.getenv("ENABLE_VIRGIN_GOOSE", "1") == "1"  # Virgin Bet combo (Goose) alerts
+ENABLE_ODDSCHECKER = os.getenv("ENABLE_ODDSCHECKER", "1") == "1"    # OddsChecker arbitrage alerts
+ENABLE_WILLIAMHILL = os.getenv("ENABLE_WILLIAMHILL", "1") == "1"    # William Hill bet builder alerts
 
 # ========= DISCORD =========
 def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=None, footer=None):
@@ -350,6 +356,12 @@ def find_player_sot_and_ga_ids(markets, player_name):
 
 def getGoosedCombos(match, player_data, delay_seconds=0, ignore_lineup=False):
     back_odds_results = []
+    
+    # Validate that player has both required markets
+    if not player_data.get('ga_id') or not player_data.get('sot_id'):
+        # print(f"Player {player_data.get('name')} missing required markets: ga_id={player_data.get('ga_id')}, sot_id={player_data.get('sot_id')}")
+        return back_odds_results
+    
     combo_payload = {
         "selections": [
             {"id": player_data['ga_id'], "eachWay": False},
@@ -601,24 +613,35 @@ def main():
     # we exit so a daily cron can restart a fresh process.
     run_start_date = datetime.now(london).date()
     while True:
+        loop_start = time.time()
         # If the local date (Europe/London) has changed since the process started,
         # exit so the cron job can restart a fresh run for the new day.
         if datetime.now(london).date() != run_start_date:
             print(f"Local date changed from {run_start_date} to {datetime.now(london).date()}; exiting for daily restart")
             return
+        
+        total_matches_checked = 0
+        total_players_processed = 0
+        
         for comp in active_comps:
             cid = comp.get('comp_id',0)
             cname = comp.get('comp_name')
+            comp_start = time.time()
             try:
                 matches = betfair.fetch_matches_for_competition(cid)
             except Exception as e:
                 print(f"  Error fetching matches for {cid}: {e}")
                 continue
+            comp_fetch_time = time.time() - comp_start
+            if comp_fetch_time > 2:
+                print(f"[TIMING] Fetching matches for {cname} took {comp_fetch_time:.2f}s")
+            
             if not matches:
                 #No upcoming matches found for this competition
                 continue
 
             for m in matches:
+                total_matches_checked += 1
                 mid = m.get('id')
                 mname = m.get('name')
                 kickoff = m.get('openDate')
@@ -636,6 +659,36 @@ def main():
                         # call _fetch_market_odds directly using the known market id(s).
                         mnodes = m.get('market_nodes') or []
                         if mnodes:
+                            # Initialize WH client once per match if enabled
+                            wh_client = None
+                            wh_match_id = None
+                            wh_offer_checked = False
+                            
+                            if ENABLE_WILLIAMHILL:
+                                # Get William Hill match ID once for this match
+                                mappings = map_betfair_to_sites(mid, ['williamhill'])
+                                wh_match_id = mappings.get('williamhill')
+                                
+                                if wh_match_id:
+                                    # Check if match is in the WH offer
+                                    if is_match_in_wh_offer(wh_match_id):
+                                        wh_offer_checked = True
+                                        try:
+                                            from willhill_betbuilder import BetBuilderClient
+                                            wh_client = BetBuilderClient()
+                                            if not wh_client.load_event(wh_match_id):
+                                                print(f"Failed to load WH event {wh_match_id}")
+                                                wh_client = None
+                                            else:
+                                                print(f"[WH] Loaded event {wh_match_id} for reuse across players")
+                                        except Exception as e:
+                                            print(f"Error loading WH client: {e}")
+                                            wh_client = None
+                                    else:
+                                        print(f"Match {wh_match_id} not in WH offer; skipping all WH checks for this match")
+                                else:
+                                    print(f"No WH mapping for Betfair {mid}; skipping all WH checks for this match")
+                            
                             # build supported_markets mapping from nodes
                             supported = {}
                             for node in mnodes:
@@ -655,12 +708,13 @@ def main():
                                         odds = []
                                     if odds:
                                         for o in odds:
+                                            total_players_processed += 1
                                             pname = o.get('outcome',"")
                                             price = o.get('odds',0)
                                             lay_size = float(o.get('size', 0))
                                             mkt = o.get('market') or o.get('market_type')
                                             # GOOSE ALERTS
-                                            if mtype == betfair.AGS_MARKET_NAME and lay_size >= GBP_THRESHOLD_GOOSE:
+                                            if ENABLE_VIRGIN_GOOSE and mtype == betfair.AGS_MARKET_NAME and lay_size >= GBP_THRESHOLD_GOOSE:
                                                 skip = False
                                                 if price < GOOSE_MIN_ODDS:
                                                     skip = True
@@ -719,11 +773,10 @@ def main():
                                                                 send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT")
                                                             save_state(pname,mid, GOOSE_STATE_FILE)
                                             # ARB ALERTS
-                                            if lay_size > GBP_ARB_THRESHOLD:
+                                            if ENABLE_ODDSCHECKER and lay_size > GBP_ARB_THRESHOLD:
                                                 if mtype == betfair.FGS_MARKET_NAME:
                                                     bettype = "First Goalscorer"
                                                     label = "FGS"
-                                                    print("There is a FGS match")
                                                 elif mtype == betfair.AGS_MARKET_NAME:
                                                     bettype = "Anytime Goalscorer"
                                                     label = "AGS"
@@ -759,46 +812,27 @@ def main():
                                                         send_discord_embed(arb_title, desc, arb_fields, colour=0xFFB80C, channel_id=DISCORD_ARB_CHANNEL_ID)
                                                     save_state(f"{pname}_{label}",mid, ARB_STATE_FILE)
                                             # WILLIAM HILL ALERTS
-                                            # GET WH MATCH ID AND CHECK IT'S IN THE OFFER
-
-                                            #CHECK WE'RE ABOVE OUR MIN LAY SIZE
-                                            if lay_size > GBP_WH_THRESHOLD:
+                                            # Reuse the WH client initialized for this match
+                                            if wh_client and lay_size > GBP_WH_THRESHOLD:
                                                 if mtype == betfair.FGS_MARKET_NAME:
                                                     bettype = "First Goalscorer"
                                                     label = "FGS"
-                                                    print("There is a FGS match")
                                                 elif mtype == betfair.AGS_MARKET_NAME:
                                                     bettype = "Anytime Goalscorer"
                                                     label = "AGS"
-                                                
-                                                # Get William Hill match ID
-                                                mappings = map_betfair_to_sites(mid, ['williamhill'])
-                                                will_hill_match_id = mappings.get('williamhill')
-                                                if not will_hill_match_id:
-                                                    print(f"No William Hill mapping for Betfair {mid}; skipping WH check")
+                                                else:
                                                     continue
                                                 
-                                                # Check if match is in the WH offer
-                                                if not is_match_in_wh_offer(will_hill_match_id):
-                                                    print(f"Match {will_hill_match_id} not in WH offer; skipping WH check")
+                                                if already_alerted(pname, wh_match_id, WH_STATE_FILE, market=label):
+                                                    print(f"Already alerted for {pname} in match {wh_match_id}; skipping")
                                                     continue
                                                 
-                                                if already_alerted(pname,will_hill_match_id,WH_STATE_FILE, market=label):
-                                                    print(f"Already alerted for {pname} in match {will_hill_match_id}; skipping")
-                                                    continue
                                                 # GET WILLIAM HILL BB ODDS HERE
                                                 betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
                                                 try:
-                                                    from willhill_betbuilder import BetBuilderClient
+                                                    print(f"Fetching WH odds for {pname} ({bettype}) in match {wh_match_id}...")
                                                     
-                                                    print(f"Fetching WH odds for {pname} ({bettype}) in match {will_hill_match_id}...")
-                                                    client = BetBuilderClient()
-                                                    
-                                                    if not client.load_event(will_hill_match_id):
-                                                        print(f"Failed to load event {will_hill_match_id}")
-                                                        continue
-                                                    
-                                                    combos = client.get_player_combinations(
+                                                    combos = wh_client.get_player_combinations(
                                                         player_name=pname,
                                                         template_name=bettype,
                                                         get_price=False  # Get combo first without price
@@ -814,11 +848,29 @@ def main():
                                                         continue
                                                     
                                                     print(f"Combo generated successfully, fetching price...")
-                                                    price_data = client.get_combination_price(combo)
+                                                    price_data = wh_client.get_combination_price(combo)
                                                     
                                                     if price_data and price_data.get('success'):
                                                         wh_odds = price_data.get('odds',0)
                                                         print(f"WH Odds for {pname}: {wh_odds}")
+                                                        
+                                                        if float(wh_odds) >= 4:
+                                                            # Boosting odds by 25%
+                                                            wh_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)  
+                                                            print(f"  Boosted to : {wh_odds}") 
+                                                        
+                                                        # Send separate WH message if configured
+                                                        if DISCORD_WH_CHANNEL_ID:
+                                                            if wh_odds >= float(betfair_lay_bet[0]['lay_odds']):
+                                                                discord_start = time.time()
+                                                                rating = round(wh_odds / price * 100, 2)
+                                                                title = f"{pname} - {label} - {wh_odds}/{price} ({rating}%)"
+                                                                desc = f"**{mname}** ({ko_str})\n{cname}\n\n£{int(lay_size)} available to [lay at {price}](https://www.betfair.com/exchange/plus/football/market/{mid})"
+                                                                fields = []
+                                                                send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID)
+                                                                save_state(f"{pname}_{label}", wh_match_id, WH_STATE_FILE)
+                                                                discord_time = time.time() - discord_start
+                                                                print(f"[TIMING] Discord alert sent in {discord_time:.2f}s")
                                                         # TODO: Compare with Betfair lay odds and send Discord alert if profitable
                                                     else:
                                                         print(f"Failed to get price: {price_data}")
@@ -828,20 +880,10 @@ def main():
                                                     print(f"Error getting WH odds: {e}")
                                                     traceback.print_exc()
                                                     continue
-                                                if float(wh_odds) >= 4:
-                                                    # Boosting odds by 25%
-                                                    wh_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)  
-                                                    print(f"  Boosted to : {wh_odds}") 
-                                                # Send separate WH message if configured
-                                                if DISCORD_WH_CHANNEL_ID:
-                                                    if wh_odds >= float(betfair_lay_bet[0]['lay_odds']):
-                                                        rating = round(back_odds / price * 100, 2)
-                                                        title = f"{pname} - {back_odds}/{price} ({rating}%)"
-                                                        desc = f"**{mname}** ({ko_str})\n{cname}\n\n£{int(lay_size)} available to [lay at {price}](https://www.betfair.com/exchange/plus/football/market/{mid})"
-                                                        fields = []
-                                                        send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID)
-                                                        save_state(f"{pname}_{label}",mid, WH_STATE_FILE)                                                    
-        print("Sleeping...")
+        
+        loop_time = time.time() - loop_start
+        print(f"[TIMING] Loop completed in {loop_time:.2f}s - {total_matches_checked} matches, {total_players_processed} players")
+        print(f"Sleeping for {POLL_SECONDS}s...")
         time.sleep(POLL_SECONDS)
 
 if __name__ == "__main__":
