@@ -879,6 +879,79 @@ def is_match_in_wh_offer(wh_match_id, offer_id=1):
         print(f"Error checking WH offer: {e}")
         return False
 
+def fetch_lineups(oddsmatcha_match_id):
+    """Fetch starting lineups from OddsMatcha API.
+    
+    Args:
+        oddsmatcha_match_id: The oddsmatcha match ID
+    
+    Returns:
+        Set of player names who are confirmed starters, or empty set if unavailable
+    """
+    try:
+        api = f"https://api.oddsmatcha.uk/lineups/{oddsmatcha_match_id}"
+        resp = requests.get(api, timeout=10)
+        if not resp.ok:
+            return set()
+        
+        data = resp.json()
+        starters = set()
+        
+        # Extract player names from both lineups
+        home_lineup = data.get('home_lineup', {}).get('line_up', [])
+        away_lineup = data.get('away_lineup', {}).get('line_up', [])
+        
+        for player in home_lineup + away_lineup:
+            name = player.get('name', '').strip()
+            if name:
+                starters.add(name)
+        
+        if starters:
+            print(f"[LINEUPS] Fetched {len(starters)} confirmed starters for match {oddsmatcha_match_id}")
+        
+        return starters
+        
+    except Exception as e:
+        print(f"[LINEUPS] Error fetching lineups for match {oddsmatcha_match_id}: {e}")
+        return set()
+
+def is_confirmed_starter(player_name, starters):
+    """Check if a player is a confirmed starter using fuzzy matching.
+    
+    Args:
+        player_name: Player name to check
+        starters: Set of confirmed starter names
+    
+    Returns:
+        True if player name matches a starter (exact or fuzzy), False otherwise
+    """
+    import re
+    
+    # Try exact match first
+    if player_name in starters:
+        return True
+    
+    # Fuzzy match: split on spaces and hyphens, match 2+ parts
+    def normalize_name(name):
+        parts = set(re.split(r'[\s\-]+', name.lower()))
+        return {p for p in parts if len(p) > 1}
+    
+    player_parts = normalize_name(player_name)
+    
+    for starter in starters:
+        starter_parts = normalize_name(starter)
+        matches = len(player_parts & starter_parts)
+        total_parts = len(player_parts | starter_parts)
+        
+        if total_parts == 0:
+            continue
+        
+        # 2+ matches or >50% match rate
+        if matches >= 2 or (matches / total_parts >= 0.5):
+            return True
+    
+    return False
+
 def fetch_exchange_odds(oddsmatcha_match_id):
     """Fetch lay odds from multiple exchanges for a match.
     
@@ -1135,11 +1208,15 @@ def main():
                             # Fetch site mappings and exchange odds once per match
                             mappings, oddsmatcha_match_id = map_betfair_to_sites(mid, ['virginbet', 'williamhill'])
                             exchange_odds = {}
+                            confirmed_starters = set()
                             if oddsmatcha_match_id:
                                 exchange_odds = fetch_exchange_odds(oddsmatcha_match_id)
                                 if exchange_odds:
                                     total_exchange_players = sum(len(players) for players in exchange_odds.values())
                                     print(f"    [EXCHANGE] Loaded odds for {total_exchange_players} players from alternative exchanges")
+                                
+                                # Fetch confirmed starters
+                                confirmed_starters = fetch_lineups(oddsmatcha_match_id)
                             
                             # Fetch OddsChecker match slug once per match (for ARB alerts)
                             match_slug = None
@@ -1279,8 +1356,11 @@ def main():
                                                         '''
                             
 
-                                                        fields = [
-                                                        ]
+                                                        fields = []
+                                                        
+                                                        # Add confirmed starter field if applicable
+                                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                                            fields.append(("Confirmed Starter", "✅"))
                                                                                 
                                                         embed_colour = 0xFF0000  # bright red for true arb
                                                         #print("ARBING")
@@ -1319,6 +1399,10 @@ def main():
                                                 ]
                                                 desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}"
                                                         
+                                                # Add confirmed starter field if applicable
+                                                if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                                    arb_fields.append(("Confirmed Starter", "✅"))
+                                                
                                                 if match_slug:
                                                     arb_fields.append(("OC Link", f"[View OC](https://www.oddschecker.com/football/{match_slug})"))
                                                 if DISCORD_ARB_CHANNEL_ID:
@@ -1422,6 +1506,11 @@ def main():
                                                             title = f"{pname} - {label} - {boosted_odds}/{price} ({rating}%)"
                                                             desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{mid})"
                                                             fields = []
+                                                            
+                                                            # Add confirmed starter field if applicable
+                                                            if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                                                fields.append(("Confirmed Starter", "✅"))
+                                                            
                                                             send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID)
                                                             save_state(f"{pname}_{label}", wh_match_id, WH_STATE_FILE)
                                                             print(f"[WH ALERT] {pname} {label} @ {boosted_odds} (rating: {rating}%)")
