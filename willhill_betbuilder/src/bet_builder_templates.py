@@ -5,6 +5,39 @@ Defines the 4 standard bet builder combinations with their market paths
 
 from typing import Dict, List, Optional
 from dataclasses import dataclass
+import re
+
+
+def _fuzzy_match_names(name1: str, name2: str) -> bool:
+    """
+    Check if two player names are a fuzzy match.
+    Returns True if at least 2 out of 3 name parts match.
+    Splits on both spaces and hyphens.
+    """
+    # Normalize: lowercase and split on both spaces and hyphens
+    parts1 = set(re.split(r'[\s\-]+', name1.lower()))
+    parts2 = set(re.split(r'[\s\-]+', name2.lower()))
+    
+    # Remove very short parts (initials, etc.)
+    parts1 = {p for p in parts1 if len(p) > 1}
+    parts2 = {p for p in parts2 if len(p) > 1}
+    
+    if not parts1 or not parts2:
+        return False
+    
+    # Count matching parts
+    matches = len(parts1 & parts2)
+    total_parts = len(parts1 | parts2)
+    
+    if total_parts == 0:
+        return False
+    
+    # Need at least 2 matching parts, OR >50% match rate
+    if matches >= 2:
+        return True
+    
+    match_rate = matches / total_parts
+    return match_rate >= 0.5
 
 
 @dataclass
@@ -200,6 +233,7 @@ class PlayerMarketChecker:
         
         available_markets = []
         missing_markets = []
+        matched_player_name = player_name  # Track the actual matched name in WH's system
         
         for market_def in template:
             category = market_def["category"]
@@ -228,9 +262,20 @@ class PlayerMarketChecker:
                         "selection": selection_type
                     })
             else:
-                # Check if player exists in this market
+                # Check if player exists in this market (use fuzzy matching)
                 selections = self.parser.get_selections_for_market(category, period, market_team)
+                
+                # Try exact match first
                 player_selection = next((s for s in selections if s.get("name") == player_name), None)
+                
+                # If no exact match, try fuzzy matching
+                if not player_selection:
+                    player_selection = next((s for s in selections if _fuzzy_match_names(s.get("name", ""), player_name)), None)
+                    if player_selection:
+                        # Update to use WH's actual player name
+                        matched_player_name = player_selection.get("name")
+                        # Log when fuzzy match is used
+                        print(f"[WH FUZZY] Matched '{player_name}' to WH player '{matched_player_name}' in {category}")
                 
                 if player_selection:
                     available_markets.append({
@@ -253,6 +298,7 @@ class PlayerMarketChecker:
             "available": len(missing_markets) == 0,
             "template": template_name,
             "player": player_name,
+            "matched_player_name": matched_player_name,  # The actual name used in WH's system
             "team": team,
             "available_markets": available_markets,
             "missing_markets": missing_markets

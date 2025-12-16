@@ -26,6 +26,324 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DEBUG_DIR = os.path.join(BASE_DIR, 'debug')
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
+# ========= WH ODDS TRACKING =========
+WH_ODDS_TRACKING_DIR = os.path.join(BASE_DIR, 'wh_odds_tracking')
+os.makedirs(WH_ODDS_TRACKING_DIR, exist_ok=True)
+RUN_COUNTER_FILE = os.path.join(WH_ODDS_TRACKING_DIR, 'run_counter.json')
+
+def load_run_counter():
+    """Load the persistent run counter from disk."""
+    try:
+        if os.path.exists(RUN_COUNTER_FILE):
+            with open(RUN_COUNTER_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get('run_number', 0)
+    except Exception as e:
+        print(f"[WARN] Failed to load run counter: {e}")
+    return 0
+
+def save_run_counter(run_number):
+    """Save the run counter to disk."""
+    try:
+        data = {'run_number': run_number, 'last_updated': datetime.now(timezone.utc).isoformat()}
+        tmp_file = RUN_COUNTER_FILE + '.tmp'
+        with open(tmp_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_file, RUN_COUNTER_FILE)
+    except Exception as e:
+        print(f"[WARN] Failed to save run counter: {e}")
+
+def track_wh_odds(match_id, match_name, player_name, market_type, wh_odds, boosted_odds, lay_odds, combo_data=None, run_number=None):
+    """
+    Track William Hill odds over time for analysis.
+    Appends timestamped records to a JSON file per match.
+    
+    Args:
+        match_id: William Hill match ID
+        match_name: Match name for reference
+        player_name: Player name
+        market_type: 'FGS' or 'AGS'
+        wh_odds: Original WH odds before boost
+        boosted_odds: Boosted odds (if applicable, same as wh_odds if not boosted)
+        lay_odds: Best lay odds from exchanges
+        combo_data: Optional dict with combo selection details
+        run_number: Optional run/loop number for correlation
+    """
+    try:
+        # Create a file per match (by match_id)
+        tracking_file = os.path.join(WH_ODDS_TRACKING_DIR, f"{match_id}.json")
+        
+        # Load existing data if file exists
+        if os.path.exists(tracking_file):
+            with open(tracking_file, 'r', encoding='utf-8') as f:
+                tracking_data = json.load(f)
+        else:
+            tracking_data = {
+                'match_id': match_id,
+                'match_name': match_name,
+                'records': []
+            }
+        
+        # Create new record
+        record = {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'player_name': player_name,
+            'market_type': market_type,
+            'wh_odds': float(wh_odds),
+            'boosted_odds': float(boosted_odds),
+            'lay_odds': float(lay_odds),
+            'rating': round((float(boosted_odds) / float(lay_odds) * 100), 2) if lay_odds > 0 else 0
+        }
+        
+        # Add run number if provided
+        if run_number is not None:
+            record['run_number'] = run_number
+        
+        # Add combo data if provided
+        if combo_data:
+            record['combo'] = combo_data
+        
+        # Append record
+        tracking_data['records'].append(record)
+        
+        # Save atomically
+        tmp_file = tracking_file + '.tmp'
+        with open(tmp_file, 'w', encoding='utf-8') as f:
+            json.dump(tracking_data, f, indent=2)
+        os.replace(tmp_file, tracking_file)
+        
+    except Exception as e:
+        print(f"[WARN] Failed to track WH odds: {e}")
+
+def track_wh_base_odds(match_id, match_name, base_odds_data, run_number=None):
+    """
+    Track William Hill base (single-leg) goalscorer odds over time.
+    This helps determine if combo price changes are driven by base odds changes.
+    Returns a set of (player_name, market_type) tuples for odds that changed.
+    
+    Args:
+        match_id: William Hill match ID
+        match_name: Match name for reference
+        base_odds_data: Dict of {(player_name, market_type): odds_value}
+        run_number: Optional run/loop number for correlation
+    
+    Returns:
+        set of (player_name, market_type) tuples that changed, or empty set
+    """
+    try:
+        # Create a separate file for base odds tracking
+        tracking_file = os.path.join(WH_ODDS_TRACKING_DIR, f"{match_id}_base.json")
+        
+        # Load existing data if file exists
+        if os.path.exists(tracking_file):
+            with open(tracking_file, 'r', encoding='utf-8') as f:
+                tracking_data = json.load(f)
+        else:
+            tracking_data = {
+                'match_id': match_id,
+                'match_name': match_name,
+                'records': []
+            }
+        
+        # Create new record with timestamp
+        record = {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'odds': {}
+        }
+        
+        # Add run number if provided
+        if run_number is not None:
+            record['run_number'] = run_number
+        
+        # Store all odds in a structured format
+        for (player_name, market_type), odds in base_odds_data.items():
+            key = f"{player_name}|{market_type}"
+            record['odds'][key] = float(odds)
+        
+        # Detect changes by comparing with previous record
+        changed_markets = set()
+        if len(tracking_data['records']) > 0:
+            prev_record = tracking_data['records'][-1]
+            for key, new_odds in record['odds'].items():
+                prev_odds = prev_record['odds'].get(key)
+                if prev_odds and prev_odds != new_odds:
+                    player_name, market_type = key.split('|')
+                    changed_markets.add((player_name, market_type))
+                    print(f"[WH BASE CHANGE] {player_name} ({market_type}): {prev_odds} → {new_odds}")
+        
+        # Append record
+        tracking_data['records'].append(record)
+        
+        # Save atomically
+        tmp_file = tracking_file + '.tmp'
+        with open(tmp_file, 'w', encoding='utf-8') as f:
+            json.dump(tracking_data, f, indent=2)
+        os.replace(tmp_file, tracking_file)
+        
+        return changed_markets
+        
+    except Exception as e:
+        print(f"[WARN] Failed to track WH base odds: {e}")
+        return set()
+
+def get_wh_base_goalscorer_odds(wh_client, wh_match_id):
+    """
+    Extract base William Hill odds for all markets used in bet builder combos.
+    Fetches from both /0 and /4 endpoints to get all available markets.
+    
+    Args:
+        wh_client: BetBuilderClient instance with loaded event
+        wh_match_id: William Hill match ID
+    
+    Returns:
+        Dict of {(player_name, market_type): odds} or {} on failure
+    """
+    try:
+        from bs4 import BeautifulSoup
+        import requests
+        
+        def fractional_to_decimal(odds_str):
+            try:
+                if odds_str == "EVS":
+                    return 2.0
+                num, denom = odds_str.split("/")
+                return round(float(num) / float(denom) + 1, 2)
+            except Exception:
+                return None
+        
+        base_odds = {}
+        
+        headers = {
+            "referer": f"https://sports.williamhill.com/betting/en-gb/football/{wh_match_id}",
+            "authority": "w.sports.williamhill.com",
+            "accept": "text/html, */*; q=0.01",
+            "accept-encoding": "gzip, deflate, br, zstd",
+            "accept-language": "en-GB,en;q=0.9,en-US;q=0.8",
+            "cache-control": "no-cache",
+            "origin": "https://sports.williamhill.com",
+            "pragma": "no-cache",
+            "priority": "u=1, i",
+            "sec-ch-ua": '"Microsoft Edge";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-site",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
+        }
+        
+        # Markets we need to track (matching combo legs):
+        # From /0: Total Goals - Over 0.5, FGS, AGS
+        # From /4: Player to Score or Assist
+        
+        # Fetch from /0 for Total Goals and Scorer Markets
+        url_0 = f"https://w.sports.williamhill.com/fragments/eventEntity/en-gb/football/{wh_match_id}/0"
+        try:
+            scraper = cloudscraper.create_scraper()
+            response = scraper.get(url_0, headers=headers, timeout=15)
+            html = response.content.decode('utf-8')
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            for section in soup.find_all('section'):
+                h2 = section.find('h2')
+                if not h2:
+                    continue
+                
+                section_name = h2.text.strip()
+                
+                # Handle Scorer Markets (FGS, AGS, etc.)
+                if section_name == 'Scorer Markets':
+                    class_to_market = {
+                        'odds-market-1': 'FGS',  # First Goalscorer
+                        'odds-market-2': 'AGS',  # Anytime Goalscorer
+                    }
+                    
+                    buttons = section.find_all('button', {'data-player': True, 'data-odds': True})
+                    
+                    for button in buttons:
+                        player_name = button.get('data-player', '').strip()
+                        odds_frac = button.get('data-odds', '')
+                        
+                        if not player_name or not odds_frac:
+                            continue
+                        
+                        parent_li = button.parent
+                        if not parent_li or parent_li.name != 'li':
+                            continue
+                        
+                        parent_classes = parent_li.get('class', [])
+                        odds_market_class = None
+                        for cls in parent_classes:
+                            if cls.startswith('odds-market-'):
+                                odds_market_class = cls
+                                break
+                        
+                        if odds_market_class not in class_to_market:
+                            continue
+                        
+                        market_type = class_to_market[odds_market_class]
+                        odds_dec = fractional_to_decimal(odds_frac)
+                        
+                        if odds_dec:
+                            base_odds[(player_name, market_type)] = odds_dec
+                
+                # Handle Total Goals section for Over 0.5
+                elif section_name in ['Total Goals', 'Match Over/Under Total Goals']:
+                    buttons = section.find_all('button', {'data-odds': True})
+                    
+                    for button in buttons:
+                        selection_text = button.get_text(strip=True)
+                        odds_frac = button.get('data-odds', '')
+                        
+                        # Look for "Over 0.5" or similar
+                        if 'over' in selection_text.lower() and '0.5' in selection_text:
+                            odds_dec = fractional_to_decimal(odds_frac)
+                            if odds_dec:
+                                base_odds[('Match Total Goals', 'Over 0.5')] = odds_dec
+                            break
+        except Exception as e:
+            print(f"[WARN] Failed to fetch WH base odds from /0: {e}")
+        
+        # Fetch from /4 for Player to Score or Assist
+        url_4 = f"https://w.sports.williamhill.com/fragments/eventEntity/en-gb/football/{wh_match_id}/4"
+        try:
+            scraper = cloudscraper.create_scraper()
+            response = scraper.get(url_4, headers=headers, timeout=15)
+            html = response.content.decode('utf-8')
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            for section in soup.find_all('section'):
+                h2 = section.find('h2')
+                if not h2:
+                    continue
+                
+                section_name = h2.text.strip()
+                
+                # Handle Player to Score or Assist
+                if section_name == 'Player to Score or Assist':
+                    buttons = section.find_all('button', {'data-player': True, 'data-odds': True})
+                    
+                    for button in buttons:
+                        player_name = button.get('data-player', '').strip()
+                        odds_frac = button.get('data-odds', '')
+                        
+                        if not player_name or not odds_frac:
+                            continue
+                        
+                        odds_dec = fractional_to_decimal(odds_frac)
+                        
+                        if odds_dec:
+                            base_odds[(player_name, 'Goal or Assist')] = odds_dec
+        except Exception as e:
+            print(f"[WARN] Failed to fetch WH base odds from /4: {e}")
+        
+        return base_odds
+        
+    except Exception as e:
+        print(f"[WARN] Failed to get WH base odds: {e}")
+        traceback.print_exc()
+        return {}
+
 # ========= CACHE CLEARING =========
 _last_cache_clear = None
 
@@ -111,6 +429,11 @@ VERBOSE_TIMING = os.getenv("VERBOSE_TIMING", "0") == "1"  # Enable detailed timi
 ENABLE_VIRGIN_GOOSE = os.getenv("ENABLE_VIRGIN_GOOSE", "1") == "1"  # Virgin Bet combo (Goose) alerts
 ENABLE_ODDSCHECKER = os.getenv("ENABLE_ODDSCHECKER", "1") == "1"    # OddsChecker arbitrage alerts
 ENABLE_WILLIAMHILL = os.getenv("ENABLE_WILLIAMHILL", "1") == "1"    # William Hill bet builder alerts
+
+# WH combo pricing modes:
+# Mode 1 (default): Only fetch combo price if no cache exists OR base odds changed
+# Mode 2: Always refresh with 5-minute timeout (existing behavior)
+WH_PRICING_MODE = int(os.getenv("WH_PRICING_MODE", "1"))  # 1 or 2
 
 # ========= DISCORD =========
 def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=None, footer=None):
@@ -752,8 +1075,18 @@ def main():
     # Record the start date (London timezone). If the date changes during a run
     # we exit so a daily cron can restart a fresh process.
     run_start_date = datetime.now(london).date()
+    
+    # Load persistent run counter
+    run_number = load_run_counter()
+    print(f"[INIT] Starting from run #{run_number + 1}")
+    
     while True:
+        run_number += 1
+        save_run_counter(run_number)  # Persist immediately
         loop_start = time.time()
+        print(f"\n{'='*80}")
+        print(f"Starting run #{run_number}")
+        print(f"{'='*80}")
         # If the local date (Europe/London) has changed since the process started,
         # exit so the cron job can restart a fresh run for the new day.
         if datetime.now(london).date() != run_start_date:
@@ -834,6 +1167,13 @@ def main():
                                                 wh_client = None
                                             else:
                                                 print(f"[WH] Loaded event {wh_match_id} for reuse across players")
+                                                
+                                                # Fetch and track base WH goalscorer odds
+                                                base_odds = get_wh_base_goalscorer_odds(wh_client, wh_match_id)
+                                                changed_base_markets = set()
+                                                if base_odds:
+                                                    print(f"[WH] Fetched {len(base_odds)} base goalscorer odds")
+                                                    changed_base_markets = track_wh_base_odds(wh_match_id, mname, base_odds, run_number=run_number)
                                         except Exception as e:
                                             print(f"Error loading WH client: {e}")
                                             wh_client = None
@@ -1016,36 +1356,77 @@ def main():
                                                 
                                                 combo = combos[0]
                                                 if not combo.get('success'):
-                                                    print(f"[WH] Combo unsuccessful for {pname} {label}")
+                                                    error_msg = combo.get('error', 'Unknown error')
+                                                    print(f"[WH] Combo unsuccessful for {pname} {label}: {error_msg}")
                                                     continue
                                                 
-                                                print(f"[WH] Found combo for {pname} {label}, fetching price...")
+                                                # Determine if we should fetch price based on mode
+                                                should_fetch_price = False
+                                                force_refresh = False
                                                 
-                                                price_data = wh_client.get_combination_price(combo)
+                                                if WH_PRICING_MODE == 1:
+                                                    # Mode 1: Only fetch if no cache OR base odds changed
+                                                    base_changed = (pname, label) in changed_base_markets
+                                                    has_cache = wh_client.generator.has_cached_price(combo)
+                                                    
+                                                    if base_changed:
+                                                        should_fetch_price = True
+                                                        force_refresh = True
+                                                        print(f"[WH MODE1] Base odds changed for {pname} {label} - forcing fresh price lookup")
+                                                    elif not has_cache:
+                                                        should_fetch_price = True
+                                                        force_refresh = False
+                                                        print(f"[WH MODE1] No cached price for {pname} {label} - fetching price")
+                                                    else:
+                                                        print(f"[WH MODE1] Using cached price for {pname} {label} (base odds unchanged)")
+                                                else:
+                                                    # Mode 2: Always fetch with 5-minute cache timeout (existing behavior)
+                                                    should_fetch_price = True
+                                                    force_refresh = False
+                                                    print(f"[WH MODE2] Fetching price for {pname} {label} (5-min cache)")
+                                                
+                                                if not should_fetch_price:
+                                                    continue
+                                                
+                                                price_data = wh_client.get_combination_price(combo, use_cache=(not force_refresh))
                                                 
                                                 if price_data and price_data.get('success'):
                                                     wh_odds = price_data.get('odds',0)
                                                     original_wh_odds = wh_odds
+                                                    boosted_odds = wh_odds
                                                     
                                                     if float(wh_odds) >= 4:
                                                         # Boosting odds by 25%
-                                                        wh_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
-                                                        print(f"[WH] {pname} {label}: WH odds {original_wh_odds} boosted to {wh_odds} vs Lay {price}")
+                                                        boosted_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
+                                                        print(f"[WH] {pname} {label}: WH odds {original_wh_odds} boosted to {boosted_odds} vs Lay {price}")
                                                     else:
                                                         print(f"[WH] {pname} {label}: WH @ {wh_odds} vs Lay @ {price}")
                                                     
+                                                    # Track odds for analysis (includes combo details)
+                                                    track_wh_odds(
+                                                        match_id=wh_match_id,
+                                                        match_name=mname,
+                                                        player_name=pname,
+                                                        market_type=label,
+                                                        wh_odds=original_wh_odds,
+                                                        boosted_odds=boosted_odds,
+                                                        lay_odds=price,
+                                                        combo_data=combo if combo else None,
+                                                        run_number=run_number
+                                                    )
+                                                    
                                                     # Send separate WH message if configured
                                                     if DISCORD_WH_CHANNEL_ID:
-                                                        if wh_odds >= float(betfair_lay_bet[0]['lay_odds']):
-                                                            rating = round(wh_odds / price * 100, 2)
-                                                            title = f"{pname} - {label} - {wh_odds}/{price} ({rating}%)"
+                                                        if boosted_odds >= float(betfair_lay_bet[0]['lay_odds']):
+                                                            rating = round(boosted_odds / price * 100, 2)
+                                                            title = f"{pname} - {label} - {boosted_odds}/{price} ({rating}%)"
                                                             desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{mid})"
                                                             fields = []
                                                             send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID)
                                                             save_state(f"{pname}_{label}", wh_match_id, WH_STATE_FILE)
-                                                            print(f"[WH ALERT] {pname} {label} @ {wh_odds} (rating: {rating}%)")
+                                                            print(f"[WH ALERT] {pname} {label} @ {boosted_odds} (rating: {rating}%)")
                                                         else:
-                                                            print(f"[WH] No alert - WH odds {wh_odds} < Lay {price}")
+                                                            print(f"[WH] No alert - WH odds {boosted_odds} < Lay {price}")
                                                 else:
                                                     print(f"[WH] Failed to get price for {pname} {label}")
                                                     continue

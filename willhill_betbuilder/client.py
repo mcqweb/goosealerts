@@ -193,12 +193,21 @@ class BetBuilderClient:
         # If no team specified, try all teams in the match
         teams_to_try = [team] if team else self.get_teams()
         all_combos = []
+        failed_attempts = []
         
         for team_name in teams_to_try:
             if template_name:
                 combo = self.generator.generate_combo_for_player(player_name, team_name, template_name)
                 if combo.get("success"):
                     all_combos.append(combo)
+                else:
+                    # Track failed attempts for logging
+                    failed_attempts.append({
+                        'team': team_name,
+                        'template': template_name,
+                        'error': combo.get('error', 'Unknown error'),
+                        'missing_markets': combo.get('missing_markets', [])
+                    })
             else:
                 combos = self.generator.generate_all_combos_for_player(player_name, team_name)
                 all_combos.extend([c for c in combos if c.get("success")])
@@ -206,6 +215,12 @@ class BetBuilderClient:
             # If we found valid combos, stop trying other teams
             if all_combos:
                 break
+        
+        # If no combos found, log why for debugging
+        if not all_combos and failed_attempts:
+            # Log all failed attempts
+            teams_tried = [f"{a['team']} ({a['error']})" for a in failed_attempts]
+            print(f"[WH DEBUG] {player_name} combo failed on all teams: {' | '.join(teams_tried)}")
         
         # Fetch prices if requested
         if get_price and all_combos:
@@ -228,12 +243,13 @@ class BetBuilderClient:
         
         return self.generator.generate_all_combos_for_event()
     
-    def get_combination_price(self, combination: Dict) -> Optional[Dict]:
+    def get_combination_price(self, combination: Dict, use_cache: bool = True) -> Optional[Dict]:
         """
         Get live pricing for a combination
         
         Args:
             combination: Combination dictionary from get_player_combinations()
+            use_cache: Whether to use cached prices (default True, set False to force refresh)
             
         Returns:
             Normalized pricing data with 'success', 'odds', 'display_odds', etc. or None if failed
@@ -241,7 +257,7 @@ class BetBuilderClient:
         if not self.generator:
             raise ValueError("No event loaded. Call load_event() first.")
         
-        raw_response = self.generator.get_combo_price(combination)
+        raw_response = self.generator.get_combo_price(combination, use_cache=use_cache)
         
         if not raw_response:
             return {'success': False, 'error': 'No response from pricing API'}

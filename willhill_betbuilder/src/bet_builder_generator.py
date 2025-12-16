@@ -29,6 +29,7 @@ class BetBuilderGenerator:
         Examples:
             'Junior Kroupi' vs 'Eli Junior Kroupi' -> True (2/3 match)
             'Benjamin Sesko' vs 'Ben Sesko' -> True (1/2 match, 50%+)
+            'Jamie Gittens' vs 'Jamie Bynoe-Gittens' -> True (2/3 match after hyphen split)
             'John Smith' vs 'Jane Doe' -> False (0/2 match)
         
         Args:
@@ -38,9 +39,11 @@ class BetBuilderGenerator:
         Returns:
             True if names match closely enough
         """
-        # Normalize: lowercase and split into parts
-        parts1 = set(name1.lower().split())
-        parts2 = set(name2.lower().split())
+        import re
+        
+        # Normalize: lowercase and split on both spaces and hyphens
+        parts1 = set(re.split(r'[\s\-]+', name1.lower()))
+        parts2 = set(re.split(r'[\s\-]+', name2.lower()))
         
         # Remove very short parts (initials, etc.) that might cause false matches
         parts1 = {p for p in parts1 if len(p) > 1}
@@ -119,7 +122,38 @@ class BetBuilderGenerator:
         
         return payload
     
-    def get_combo_price(self, combo: Dict, session_cookie: Optional[str] = None, proxies: Optional[Dict] = None) -> Optional[Dict]:
+    def has_cached_price(self, combo: Dict) -> bool:
+        """
+        Check if a valid cached price exists for this combo.
+        
+        Args:
+            combo: Combination dictionary from generate_combo_for_player
+            
+        Returns:
+            True if valid cache exists, False otherwise
+        """
+        payload = self.create_pricing_payload(combo)
+        if not payload:
+            return False
+        
+        # Generate cache key from payload selections
+        selection_ids = sorted([s['selectionId'] for s in payload.get('selections', [])])
+        cache_key = '_'.join(selection_ids)
+        cache_file = self.cache_dir / f"{cache_key}.json"
+        
+        if not cache_file.exists():
+            return False
+        
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            ts = float(cached.get('ts', 0))
+            # Check if cache is still valid (within timeout)
+            return time.time() - ts <= self.WH_PRICE_CACHE_DURATION
+        except Exception:
+            return False
+    
+    def get_combo_price(self, combo: Dict, session_cookie: Optional[str] = None, proxies: Optional[Dict] = None, use_cache: bool = True) -> Optional[Dict]:
         """
         Get the price for a combination from William Hill pricing API
         
@@ -127,6 +161,7 @@ class BetBuilderGenerator:
             combo: Combination dictionary from generate_combo_for_player
             session_cookie: SESSION cookie value for authentication (defaults to Config.SESSION_COOKIE)
             proxies: Proxy configuration dict (defaults to Config.get_proxies())
+            use_cache: Whether to use cached prices (default True, set False to force refresh)
             
         Returns:
             API response as dictionary, or None if request fails
@@ -143,8 +178,8 @@ class BetBuilderGenerator:
         cache_key = '_'.join(selection_ids)
         cache_file = self.cache_dir / f"{cache_key}.json"
         
-        # Try to load from cache
-        if cache_file.exists():
+        # Try to load from cache (only if use_cache is True)
+        if use_cache and cache_file.exists():
             try:
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     cached = json.load(f)
@@ -240,11 +275,22 @@ class BetBuilderGenerator:
         availability = self.checker.check_player_availability(player_name, team, template_name)
         
         if not availability["available"]:
+            # Log why combo failed
+            missing = availability.get("missing_markets", [])
+            if missing:
+                missing_desc = ", ".join([f"{m.get('category', 'Unknown')} ({m.get('period', 'Unknown')})" for m in missing[:2]])
+                error_msg = f"Player not available - missing: {missing_desc}"
+            else:
+                error_msg = "Player not available for this template"
+            
             return {
                 "success": False,
-                "error": "Player not available for this template",
+                "error": error_msg,
                 "missing_markets": availability["missing_markets"]
             }
+        
+        # Use the matched player name from WH's system (handles fuzzy matching)
+        wh_player_name = availability.get("matched_player_name", player_name)
         
         # Get template definition
         template = BetBuilderTemplates.get_template(template_name)
@@ -258,9 +304,9 @@ class BetBuilderGenerator:
             market_team = market_def.get("team", "").replace("{team}", team)
             selection_type = market_def["selection_type"]
             
-            # Replace player placeholder if present
+            # Replace player placeholder if present (use WH's actual player name)
             if "{player}" in selection_type:
-                selection_name = player_name
+                selection_name = wh_player_name
             else:
                 selection_name = selection_type
             
