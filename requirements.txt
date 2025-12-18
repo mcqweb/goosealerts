@@ -6,3 +6,4 @@ pytz
 Unidecode
 betfairlightweight
 beautifulsoup4
+curl_cffi

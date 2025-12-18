@@ -250,13 +250,43 @@ class BetBuilderGenerator:
                     pass  # Cache write failure shouldn't break the flow
                 return response_data
             except requests.exceptions.RequestException as e:
-                #print(f"[PRICING DEBUG] Request failed: {e}")
-                if attempt == 0 and getattr(e.response, 'status_code', None) in (401, 403):
-                    #print("[PRICING DEBUG] Got 401/403, refreshing session...")
+                resp = getattr(e, 'response', None)
+                status = getattr(resp, 'status_code', None)
+
+                # If 400 Bad Request, dump request+response to a log file for inspection
+                if status == 400:
+                    try:
+                        dump = {
+                            'url': Config.WILLIAMHILL_PRICING_API,
+                            'headers': Config.API_HEADERS,
+                            'cookies': cookies,
+                            'proxies': proxy_config,
+                            'payload': payload,
+                            'response_status': status,
+                            'response_text': resp.text if resp is not None else None
+                        }
+                        log_file = self.cache_dir / f"{cache_key}_400_{int(time.time())}.json"
+                        with open(log_file, 'w', encoding='utf-8') as lf:
+                            json.dump(dump, lf, indent=2)
+                        print(f"[PRICING] 400 Bad Request - details written to {log_file}")
+                    except Exception as ex:
+                        print(f"[PRICING] Failed to write 400 dump: {ex}")
+
+                # Handle auth failures by refreshing session once
+                if attempt == 0 and status in (401, 403):
                     _refresh_wh_session()
                     cookies = {"SESSION": _load_session_cookie()}
                     continue
+
+                # Log response details when available
                 print(f"Error fetching price: {e}")
+                if status:
+                    try:
+                        print(f"[PRICING] Response status: {status}")
+                        if resp is not None:
+                            print(f"[PRICING] Response body: {resp.text[:4000]}")
+                    except Exception:
+                        pass
                 return None
 
     def _get_selection_id(self, category: str, period: str, team: str, selection_name: str) -> str:
