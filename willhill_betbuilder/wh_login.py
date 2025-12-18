@@ -39,10 +39,7 @@ else:
     PROXIES = {}
 
 
-def full_login(username, password):
-    """Perform full login flow"""
-    print("=" * 60)
-    print("FULL LOGIN FLOW")
+def full_login(username, password, proxies=None):
     print("=" * 60)
         
     # Step 1: Get login form with executionKey
@@ -74,8 +71,9 @@ def full_login(username, password):
     print(f"Using HTTP client: {client_used}")
     r1 = session.get(url1, headers=headers1, proxies=PROXIES)
     
+    used_proxies = proxies if proxies is not None else PROXIES
     if not r1:
-        print("✗ Failed to get login form ")
+        r1 = session.get(url1, headers=headers1, proxies=used_proxies)
         return None
         
     try:
@@ -152,10 +150,9 @@ def full_login(username, password):
         # Manually encode payload to match browser (for booleans and on/off)
         from urllib.parse import urlencode
         encoded_payload = urlencode(payload)
-        r2 = session.post(url2, data=encoded_payload, headers=headers2, proxies=PROXIES)
+        r2 = session.post(url2, data=encoded_payload, headers=headers2, proxies=used_proxies)
         print(f"\nResponse status: {r2.status_code}")
         print(f"Content-Type: {r2.headers.get('Content-Type')}")
-        
         print(f"\n=== Response Headers ===")
         for header, value in r2.headers.items():
             print(f"{header}: {value}")
@@ -254,7 +251,7 @@ def full_login(username, password):
                     print(f"{session_cookie}")
                     # Write SESSION to williamhill_session.txt for other scripts
                     try:
-                        session_file = 'williamhill_session.txt'
+                        session_file = Path(__file__).resolve().parents[0] / 'williamhill_session.txt'
                         with open(session_file, 'w', encoding='utf-8') as sf:
                             sf.write(session_cookie)
                         print(f"✓ Wrote SESSION to {session_file}")
@@ -277,96 +274,6 @@ def full_login(username, password):
         traceback.print_exc()
         return session
         
-def refresh_session(cookies_file=None):
-    """Refresh existing session using CASTGC cookie"""
-    print("=" * 60)
-    print("SESSION REFRESH FLOW")
-    print("=" * 60)
-    
-    print(f"\nAvailable clients: {', '.join([name for name, _ in AVAILABLE_CLIENTS])}")
-    session, client_name = create_session()
-    print(f"Using: {client_name}")
-    print("=" * 60)
-    print("SESSION REFRESH FLOW")
-    print("=" * 60)
-    
-    session = create_session()
-    print(f"Using: {'cloudscraper' if USE_CLOUDSCRAPER else 'requests'}")
-    
-    # Load existing cookies
-    if cookies_file is None:
-        cookies_file = os.path.join("cookies", "william_hill.txt")
-    
-    if not load_cookies_netscape(session, cookies_file):
-        print("Cannot refresh without existing cookies. Use 'login' command first.")
-        return None
-    
-    # Check for CASTGC
-    if 'CASTGC' not in session.cookies:
-        print("✗ No CASTGC cookie found. Need to perform full login.")
-        return None
-    
-    print(f"✓ Found CASTGC: {session.cookies.get('CASTGC')[:50]}...")
-    
-    # Step 1: CAS login endpoint
-    print("\n[1/2] Calling CAS login endpoint...")
-    url1 = "https://auth.williamhill.com/cas/login?service=https%3A%2F%2Fsessc-cs.williamhill.com%2Fhandle"
-    
-    headers1 = {
-        "Accept": "application/json",
-        "Accept-Language": "en-GB,en;q=0.9",
-        "Origin": "https://sports.williamhill.com",
-        "Referer": "https://sports.williamhill.com/betting/en-gb/football/OB_EV38027661/reading-v-luton"
-    }
-    
-    try:
-        r1 = session.get(url1, headers=headers1, timeout=30)
-        print(f"Response status: {r1.status_code}")
-        print(f"Final URL: {r1.url}")
-    except Exception as e:
-        print(f"✗ CAS request failed: {e}")
-        return None
-    
-    # Step 2: Get SESSION cookie
-    print("\n[2/2] Getting SESSION cookie...")
-    url2 = "https://transact.williamhill.com/betslip/api/bets/slip?lang=en"
-    
-    headers2 = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Origin": "https://sports.williamhill.com",
-        "Referer": "https://sports.williamhill.com/betting/en-gb/football/OB_EV38027661/reading-v-luton",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-    }
-    
-    try:
-        r2 = session.get(url2, headers=headers2, timeout=30)
-        print(f"Response status: {r2.status_code}")
-        
-        session_cookie = session.cookies.get('SESSION')
-        if session_cookie:
-            print(f"\n{'=' * 60}")
-            print("✓ SUCCESS! Got SESSION cookie:")
-            print(f"{'=' * 60}")
-            print(f"{session_cookie}")
-            try:
-                session_file = 'williamhill_session.txt'
-                with open(session_file, 'w', encoding='utf-8') as sf:
-                    sf.write(session_cookie)
-                print(f"✓ Wrote SESSION to {session_file}")
-            except Exception as e:
-                print(f"⚠ Failed to write session file: {e}")
-            print(f"\nUpdate your .env file with:")
-            print(f"WILLIAMHILL_SESSION={session_cookie}")
-            print(f"{'=' * 60}")
-            return session
-        else:
-            print(f"✗ No SESSION cookie returned")
-            return session
-    except Exception as e:
-        print(f"✗ Failed to get SESSION: {e}")
-        return session
-
 def main():
     if len(sys.argv) < 2:
         print("Usage:")

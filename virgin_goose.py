@@ -892,14 +892,32 @@ def fetch_lineups(oddsmatcha_match_id):
         api = f"https://api.oddsmatcha.uk/lineups/{oddsmatcha_match_id}"
         resp = requests.get(api, timeout=10)
         if not resp.ok:
+            print(f"[LINEUPS] Lineups API returned status {resp.status_code} for match {oddsmatcha_match_id}")
             return set()
-        
-        data = resp.json()
+
+        try:
+            data = resp.json()
+        except Exception as e:
+            print(f"[LINEUPS] Failed to decode JSON from lineups API for match {oddsmatcha_match_id}: {e}")
+            try:
+                print(f"[LINEUPS] Response text: {resp.text[:800]}")
+            except Exception:
+                pass
+            return set()
+
+        if not isinstance(data, dict):
+            print(f"[LINEUPS] Unexpected lineups payload for match {oddsmatcha_match_id}: {type(data)}")
+            try:
+                print(f"[LINEUPS] Payload snippet: {str(data)[:800]}")
+            except Exception:
+                pass
+            return set()
+
         starters = set()
-        
+
         # Extract player names from both lineups
-        home_lineup = data.get('home_lineup', {}).get('line_up', [])
-        away_lineup = data.get('away_lineup', {}).get('line_up', [])
+        home_lineup = (data.get('home_lineup') or {}).get('line_up', [])
+        away_lineup = (data.get('away_lineup') or {}).get('line_up', [])
         
         for player in home_lineup + away_lineup:
             name = player.get('name', '').strip()

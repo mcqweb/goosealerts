@@ -52,21 +52,30 @@ class Config:
 
             username = os.environ.get('WILLIAMHILL_USERNAME')
             password = os.environ.get('WILLIAMHILL_PASSWORD')
-            if (not cls.SESSION_FILE.exists() or cls.SESSION_FILE.stat().st_size == 0) and username and password:
+            if (not os.path.exists(cls.SESSION_FILE) or os.path.getsize(cls.SESSION_FILE) == 0) and username and password:
                 try:
-                    print('[Config] williamhill_session.txt missing — running wh_login.py to create it')
-                    import subprocess, sys
-                    from pathlib import Path as _P
-                    wh_login_path = os.path.join(os.path.dirname(__file__), "wh_login.py")
-                    print(wh_login_path)
-                    subprocess.run([
-                        sys.executable, str(wh_login_path), 'login', username, password
-                    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    print('[Config] williamhill_session.txt missing — importing wh_login to create it')
+                    # Try regular import first
+                    try:
+                        import wh_login as whmod
+                    except Exception:
+                        # Fallback: load module from repository root path
+                        import importlib.util
+                        wh_path = Path(__file__).resolve().parents[1] / 'wh_login.py'
+                        spec = importlib.util.spec_from_file_location('wh_login', str(wh_path))
+                        whmod = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(whmod)
+
+                    # Call the login function directly and let it write the session file
+                    try:
+                        whmod.full_login(username, password, proxies=cls.get_proxies())
+                    except Exception as e:
+                        print(f'[Config] wh_login.full_login raised: {e}')
                 except Exception as e:
-                    print(f'[Config] Failed to run wh_login.py: {e}')
+                    print(f'[Config] Failed to import/run wh_login.py: {e}')
 
             # Try reading again after attempted creation
-            if cls.SESSION_FILE.exists():
+            if os.path.exists(cls.SESSION_FILE):
                 try:
                     with open(cls.SESSION_FILE, "r", encoding="utf-8") as f:
                         value = f.read().strip()
