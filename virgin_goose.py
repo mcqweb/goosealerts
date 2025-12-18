@@ -453,10 +453,17 @@ def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=N
     if footer:
         # 'footer' is now the dictionary key for the footer object
         # 'text' and 'icon_url' are keys within the footer object
-        embed["footer"] = {
-            "text": footer, # Use the string passed to the function
-            "icon_url": 'https://img.icons8.com/?size=100&id=CXvbGFYLkaMY&format=png&color=000000'
-        }
+        if channel_id == DISCORD_GOOSE_CHANNEL_ID:
+            embed["footer"] = {
+                "text": footer, # Use the string passed to the function
+                "icon_url": 'https://img.icons8.com/?size=100&id=CXvbGFYLkaMY&format=png&color=000000'
+            }
+        elif channel_id == DISCORD_WH_CHANNEL_ID:
+            embed["footer"] = {
+                "text": footer
+                
+            }
+
     
     # --- 3. Add the timestamp if a footer wasn't provided (as per your original logic) ---
     else:
@@ -1546,8 +1553,12 @@ def main():
                                                             # Add confirmed starter field if applicable
                                                             if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
                                                                 fields.append(("Confirmed Starter", "✅"))
-                                                            
-                                                            send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID)
+                                                            #build footer
+                                                            if label == "FGS":
+                                                                footer_text = f"{pname} FGS + AGS + Over 0.5 Goals"
+                                                            elif label == "AGS":
+                                                                footer_text = f"{pname} AGS + G/A + Over 0.5 Goals"
+                                                            send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID, footer=footer_text)
                                                             save_state(f"{pname}_{label}", wh_match_id, WH_STATE_FILE)
                                                             print(f"[WH ALERT] {pname} {label} @ {boosted_odds} (rating: {rating}%)")
                                                         else:
