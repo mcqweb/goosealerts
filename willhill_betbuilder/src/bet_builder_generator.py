@@ -487,9 +487,10 @@ class BetBuilderGenerator:
 
 # Helper for session refresh (module-level)
 def _refresh_wh_session():
-    import subprocess, sys, os
+    import os
     from pathlib import Path
     from dotenv import load_dotenv
+    import importlib.util
     dotenv_path = Path(__file__).resolve().parents[1] / '.env'
     if dotenv_path.exists():
         load_dotenv(dotenv_path)
@@ -498,11 +499,21 @@ def _refresh_wh_session():
     if not username or not password:
         print("[SESSION REFRESH] Missing WILLIAMHILL_USERNAME or WILLIAMHILL_PASSWORD in .env!")
         return
-    print(f"[SESSION REFRESH] Running: python wh_login.py login <user> <pass>")
+    print(f"[SESSION REFRESH] Importing wh_login and running full_login(...) to refresh session")
     try:
-        subprocess.run([
-            sys.executable, str(Path(__file__).resolve().parents[2] / 'wh_login.py'),
-            'login', username, password
-        ], check=True)
+        try:
+            import wh_login as whmod
+        except Exception:
+            wh_path = Path(__file__).resolve().parents[2] / 'wh_login.py'
+            spec = importlib.util.spec_from_file_location('wh_login', str(wh_path))
+            whmod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(whmod)
+
+        # Call the login function directly and let it write the session file
+        try:
+            whmod.full_login(username, password, proxies=Config.get_proxies())
+        except TypeError:
+            # older wh_login may not accept proxies param; call without
+            whmod.full_login(username, password)
     except Exception as e:
-        print(f"[SESSION REFRESH] wh_login.py failed: {e}")
+        print(f"[SESSION REFRESH] wh_login.full_login failed: {e}")
