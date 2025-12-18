@@ -52,11 +52,22 @@ class WilliamHillAPIClient:
         """
         url = f"{Config.WILLIAMHILL_BYO_API_BASE}/event/{event_id}/markets/byoFreedom"
         
+        print(f"\n[API DEBUG] Making request to: {url}")
+        print(f"[API DEBUG] Headers: {dict(self.session.headers)}")
+        print(f"[API DEBUG] Cookies: {dict(self.session.cookies)}")
+        if self.proxies:
+            print(f"[API DEBUG] Proxies: {self.proxies}")
+        
         try:
             response = self.session.get(url, timeout=self.timeout)
+            print(f"[API DEBUG] Response status: {response.status_code}")
+            print(f"[API DEBUG] Response headers: {dict(response.headers)}")
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
+            print(f"[API DEBUG] Request failed: {str(e)}")
+            if hasattr(e, 'response') and e.response is not None:
+                print(f"[API DEBUG] Response body: {e.response.text[:500]}")
             raise Exception(f"Failed to fetch markets for event {event_id}: {str(e)}")
     
     def get_event_start_time(self, markets_data: Dict[str, Any]) -> datetime:

@@ -6,10 +6,15 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env file if it exists
+# Load .env file if it exists (check both module dir and parent dir)
 env_path = Path(__file__).parent / '.env'
 if env_path.exists():
     load_dotenv(env_path)
+else:
+    # Try parent directory (for when used as submodule)
+    parent_env = Path(__file__).parent.parent / '.env'
+    if parent_env.exists():
+        load_dotenv(parent_env)
 
 
 class Config:
@@ -19,11 +24,66 @@ class Config:
     WILLIAMHILL_BYO_API_BASE = "https://sports.williamhill.com/data/byo01/en-gb"
     WILLIAMHILL_PRICING_API = "https://transact.williamhill.com/betslip/api/bets/getByoPrice"
     
-    # Session Cookie - Update this as needed
-    SESSION_COOKIE = os.environ.get(
-        "WILLIAMHILL_SESSION",
-        "REDACTED"
-    )
+    # Session Cookie - Always read from file before use
+    SESSION_FILE = "williamhill_session.txt"
+    SESSION_COOKIE = None  # Will be loaded dynamically
+
+    @classmethod
+    def get_session_cookie(cls):
+        """
+        Always read the session cookie from williamhill_session.txt if it exists, else fallback to env.
+        """
+        try:
+            # If session file exists and has content, return it
+            if cls.SESSION_FILE.exists():
+                with open(cls.SESSION_FILE, "r", encoding="utf-8") as f:
+                    value = f.read().strip()
+                    if value:
+                        cls.SESSION_COOKIE = value
+                        return value
+
+            # If file missing or empty, try to create it by running the login flow
+            # Load .env and read credentials
+            try:
+                from dotenv import load_dotenv
+                load_dotenv(Path(__file__).parent.parent / '.env')
+            except Exception:
+                pass
+
+            username = os.environ.get('WILLIAMHILL_USERNAME')
+            password = os.environ.get('WILLIAMHILL_PASSWORD')
+            if (not cls.SESSION_FILE.exists() or cls.SESSION_FILE.stat().st_size == 0) and username and password:
+                try:
+                    print('[Config] williamhill_session.txt missing — running wh_login.py to create it')
+                    import subprocess, sys
+                    from pathlib import Path as _P
+                    wh_login_path = _P(__file__).parent.parent / 'wh_login.py'
+                    subprocess.run([
+                        sys.executable, str(wh_login_path), 'login', username, password
+                    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception as e:
+                    print(f'[Config] Failed to run wh_login.py: {e}')
+
+            # Try reading again after attempted creation
+            if cls.SESSION_FILE.exists():
+                try:
+                    with open(cls.SESSION_FILE, "r", encoding="utf-8") as f:
+                        value = f.read().strip()
+                        if value:
+                            cls.SESSION_COOKIE = value
+                            return value
+                except Exception:
+                    pass
+
+            # Final fallback to env var
+            value = os.environ.get("WILLIAMHILL_SESSION", "REDACTED")
+            cls.SESSION_COOKIE = value
+            return value
+        except Exception as e:
+            print(f"[Config] Failed to read/create session file: {e}")
+            value = os.environ.get("WILLIAMHILL_SESSION", "REDACTED")
+            cls.SESSION_COOKIE = value
+            return value
     
     # Proxy Settings - Set these to route requests through a proxy
     # Format: "http://user:pass@host:port" or "http://host:port"
@@ -84,12 +144,15 @@ class Config:
     @classmethod
     def set_session_cookie(cls, cookie):
         """
-        Update the session cookie
-        
-        Args:
-            cookie (str): New session cookie value
+        Update the session cookie in the file and in memory
         """
-        cls.SESSION_COOKIE = cookie
+        try:
+            with open(cls.SESSION_FILE, "w", encoding="utf-8") as f:
+                f.write(cookie.strip())
+            cls.SESSION_COOKIE = cookie.strip()
+        except Exception as e:
+            print(f"[Config] Failed to write session file: {e}")
+            cls.SESSION_COOKIE = cookie.strip()
     
     @classmethod
     def set_proxy(cls, http_proxy=None, https_proxy=None):

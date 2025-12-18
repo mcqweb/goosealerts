@@ -7,17 +7,13 @@ as a module in other projects.
 
 from typing import Dict, List, Optional
 from pathlib import Path
-import sys
 
-# Ensure proper imports
-sys.path.insert(0, str(Path(__file__).parent))
-
-from config import Config
-from src.api_client import WilliamHillAPIClient
-from src.cache_manager import CacheManager
-from src.market_parser import MarketParser
-from src.bet_builder_generator import BetBuilderGenerator
-from src.bet_builder_templates import BetBuilderTemplates, PlayerMarketChecker
+from .config import Config
+from .src.api_client import WilliamHillAPIClient
+from .src.cache_manager import CacheManager
+from .src.market_parser import MarketParser
+from .src.bet_builder_generator import BetBuilderGenerator
+from .src.bet_builder_templates import BetBuilderTemplates, PlayerMarketChecker
 
 
 class BetBuilderClient:

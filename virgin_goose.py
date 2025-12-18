@@ -981,7 +981,7 @@ def fetch_exchange_odds(oddsmatcha_match_id):
         result = {}
         current_time = datetime.now(timezone.utc)
         
-        print(f"[DEBUG] Fetched {len(data)} markets from oddsmatcha for match {oddsmatcha_match_id}")
+        #print(f"[DEBUG] Fetched {len(data)} markets from oddsmatcha for match {oddsmatcha_match_id}")
         
         for market in data:
             market_name = market.get('market_name', '')
@@ -990,7 +990,7 @@ def fetch_exchange_odds(oddsmatcha_match_id):
             if market_name not in ['Anytime Goalscorer', 'First Goalscorer']:
                 continue
             
-            print(f"[DEBUG] Processing market: {market_name}, odds count: {len(market.get('odds', []))}")
+            #print(f"[DEBUG] Processing market: {market_name}, odds count: {len(market.get('odds', []))}")
             
             if market_name not in result:
                 result[market_name] = {}
@@ -1020,10 +1020,10 @@ def fetch_exchange_odds(oddsmatcha_match_id):
                         
                         age_minutes = (current_time - last_updated).total_seconds() / 60
                         if age_minutes > 5:
-                            print(f"[DEBUG] Skipping {outcome_name} on {site_name} - data age: {age_minutes:.1f} minutes")
+                            #print(f"[DEBUG] Skipping {outcome_name} on {site_name} - data age: {age_minutes:.1f} minutes")
                             continue
                     except Exception as e:
-                        print(f"[DEBUG] Failed to parse timestamp for {outcome_name}: {e}")
+                        #print(f"[DEBUG] Failed to parse timestamp for {outcome_name}: {e}")
                         continue  # Skip if we can't parse the timestamp
                 
                 # Store the odds
@@ -1035,9 +1035,9 @@ def fetch_exchange_odds(oddsmatcha_match_id):
                     'lay_odds': float(lay_odds),
                     'last_updated': last_updated_str
                 })
-                print(f"[DEBUG] Added {outcome_name} on {site_name} @ {lay_odds}")
+                #print(f"[DEBUG] Added {outcome_name} on {site_name} @ {lay_odds}")
         
-        print(f"[DEBUG] Final result: {len(result)} markets, total players: {sum(len(players) for players in result.values())}")
+        #print(f"[DEBUG] Final result: {len(result)} markets, total players: {sum(len(players) for players in result.values())}")
         return result
         
     except Exception as e:

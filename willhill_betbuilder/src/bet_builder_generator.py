@@ -78,6 +78,21 @@ class BetBuilderGenerator:
         """
         self.parser = parser
         self.checker = PlayerMarketChecker(parser)
+        # Debug: print where this class was loaded from and whether key methods exist
+        try:
+            import inspect
+            src = inspect.getfile(self.__class__)
+        except Exception:
+            src = None
+        #print(f"[DEBUG] BetBuilderGenerator class file: {src}")
+        has_method = hasattr(self, 'generate_combo_for_player')
+        #print(f"[DEBUG] generate_combo_for_player present: {has_method}")
+        # list a few callable attrs for quick inspection
+        try:
+            callables = [m for m in dir(self) if callable(getattr(self, m)) and not m.startswith('_')]
+        except Exception:
+            callables = []
+        #print(f"[DEBUG] callables sample: {callables[:10]}")
         
         # Cache configuration for price responses
         self.WH_PRICE_CACHE_DURATION = 300  # 5 minutes in seconds
@@ -196,38 +211,54 @@ class BetBuilderGenerator:
         # Make API request
         api_start = timing_module.time()
         
-        # Use config values if not provided
-        cookie = session_cookie or Config.SESSION_COOKIE
+        # Always reload session cookie from file before each call
+        def _load_session_cookie():
+            if session_cookie:
+                return session_cookie
+            return Config.get_session_cookie()
         proxy_config = proxies if proxies is not None else Config.get_proxies()
-        
-        cookies = {
-            "SESSION": cookie
-        }
-        
-        try:
-            response = requests.post(
-                Config.WILLIAMHILL_PRICING_API,
-                json=payload,
-                headers=Config.API_HEADERS,
-                cookies=cookies,
-                proxies=proxy_config,
-                timeout=Config.API_TIMEOUT
-            )
-            response.raise_for_status()
-            response_data = response.json()
-            
-            # Save to cache
+        cookies = {"SESSION": _load_session_cookie()}
+        for attempt in range(2):
+            #print(f"\n[PRICING DEBUG] Making request to: {Config.WILLIAMHILL_PRICING_API}")
+            #print(f"[PRICING DEBUG] Headers: {Config.API_HEADERS}")
+            #print(f"[PRICING DEBUG] Cookies: {cookies}")
+            #print(f"[PRICING DEBUG] Payload: {json.dumps(payload, indent=2)}")
+
             try:
-                with open(cache_file, 'w', encoding='utf-8') as f:
-                    json.dump({'ts': time.time(), 'response': response_data}, f)
-            except Exception:
-                pass  # Cache write failure shouldn't break the flow
-            
-            return response_data
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching price: {e}")
-            return None
-    
+                response = requests.post(
+                    Config.WILLIAMHILL_PRICING_API,
+                    json=payload,
+                    headers=Config.API_HEADERS,
+                    cookies=cookies,
+                    proxies=proxy_config,
+                    timeout=Config.API_TIMEOUT
+                )
+                #print(f"[PRICING DEBUG] Response status: {response.status_code}")
+                #print(f"[PRICING DEBUG] Response headers: {dict(response.headers)}")
+                if response.status_code in (401, 403) and attempt == 0:
+                    #print("[PRICING DEBUG] Got 401/403, refreshing session...")
+                    _refresh_wh_session()
+                    cookies = {"SESSION": _load_session_cookie()}
+                    continue
+                response.raise_for_status()
+                response_data = response.json()
+                # Save to cache
+                try:
+                    with open(cache_file, 'w', encoding='utf-8') as f:
+                        json.dump({'ts': time.time(), 'response': response_data}, f)
+                except Exception:
+                    pass  # Cache write failure shouldn't break the flow
+                return response_data
+            except requests.exceptions.RequestException as e:
+                #print(f"[PRICING DEBUG] Request failed: {e}")
+                if attempt == 0 and getattr(e.response, 'status_code', None) in (401, 403):
+                    #print("[PRICING DEBUG] Got 401/403, refreshing session...")
+                    _refresh_wh_session()
+                    cookies = {"SESSION": _load_session_cookie()}
+                    continue
+                print(f"Error fetching price: {e}")
+                return None
+
     def _get_selection_id(self, category: str, period: str, team: str, selection_name: str) -> str:
         """
         Get the selection ID for a specific selection
@@ -452,3 +483,26 @@ class BetBuilderGenerator:
                 stats["by_team"][team] += 1
         
         return stats
+
+
+# Helper for session refresh (module-level)
+def _refresh_wh_session():
+    import subprocess, sys, os
+    from pathlib import Path
+    from dotenv import load_dotenv
+    dotenv_path = Path(__file__).resolve().parents[1] / '.env'
+    if dotenv_path.exists():
+        load_dotenv(dotenv_path)
+    username = os.environ.get('WILLIAMHILL_USERNAME')
+    password = os.environ.get('WILLIAMHILL_PASSWORD')
+    if not username or not password:
+        print("[SESSION REFRESH] Missing WILLIAMHILL_USERNAME or WILLIAMHILL_PASSWORD in .env!")
+        return
+    print(f"[SESSION REFRESH] Running: python wh_login.py login <user> <pass>")
+    try:
+        subprocess.run([
+            sys.executable, str(Path(__file__).resolve().parents[2] / 'wh_login.py'),
+            'login', username, password
+        ], check=True)
+    except Exception as e:
+        print(f"[SESSION REFRESH] wh_login.py failed: {e}")
