@@ -25,7 +25,7 @@ class Config:
     WILLIAMHILL_PRICING_API = "https://transact.williamhill.com/betslip/api/bets/getByoPrice"
     
     # Session Cookie - Always read from file before use
-    SESSION_FILE = "williamhill_session.txt"
+    SESSION_FILE = os.path.join(os.path.dirname(__file__), "williamhill_session.txt")
     SESSION_COOKIE = None  # Will be loaded dynamically
 
     @classmethod
@@ -35,7 +35,7 @@ class Config:
         """
         try:
             # If session file exists and has content, return it
-            if cls.SESSION_FILE.exists():
+            if os.path.exists(cls.SESSION_FILE):
                 with open(cls.SESSION_FILE, "r", encoding="utf-8") as f:
                     value = f.read().strip()
                     if value:
@@ -57,7 +57,8 @@ class Config:
                     print('[Config] williamhill_session.txt missing — running wh_login.py to create it')
                     import subprocess, sys
                     from pathlib import Path as _P
-                    wh_login_path = _P(__file__).parent.parent / 'wh_login.py'
+                    wh_login_path = os.path.join(os.path.dirname(__file__), "wh_login.py")
+                    print(wh_login_path)
                     subprocess.run([
                         sys.executable, str(wh_login_path), 'login', username, password
                     ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
