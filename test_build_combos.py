@@ -246,6 +246,9 @@ def run_combos(state: dict, match_id: int) -> None:
         except Exception:
             return None
 
+    fgs_results = []
+    ags_results = []
+
     for name in common:
         a = first_map[name]
         b = anytime_map[name]
@@ -269,21 +272,48 @@ def run_combos(state: dict, match_id: int) -> None:
 
         display_name = a.get("name") or b.get("name")
 
-        # Indicate if the FGS combo (FGS+Anytime) is lower/higher than standalone FGS
-        lower = False
-        higher = False
+        # Determine increases and percentages
+        increase_ags = False
+        increase_fgs = False
+        ags_pct = None
+        fgs_pct = None
         try:
-            if isinstance(fgs_combo_odds, (int, float)) and isinstance(single_odds, (int, float)):
-                lower = fgs_combo_odds < single_odds
-                higher = fgs_combo_odds > single_odds
+            if isinstance(ags_combo_odds, (int, float)) and isinstance(anytime_odds, (int, float)) and anytime_odds > 0:
+                increase_ags = ags_combo_odds > anytime_odds
+                ags_pct = round((ags_combo_odds / anytime_odds - 1) * 100, 2)
+            if isinstance(fgs_combo_odds, (int, float)) and isinstance(single_odds, (int, float)) and single_odds > 0:
+                increase_fgs = fgs_combo_odds > single_odds
+                fgs_pct = round((fgs_combo_odds / single_odds - 1) * 100, 2)
         except Exception:
-            lower = higher = False
+            increase_ags = increase_fgs = False
 
-        note = "(fgs combo higher)" if higher else ("(fgs combo lower)" if lower else "")
+        # Collect results; only include entries where combo increased
+        if increase_fgs and fgs_pct is not None:
+            fgs_results.append((display_name, single_odds, fgs_combo_odds, fgs_pct))
+        if increase_ags and ags_pct is not None:
+            ags_results.append((display_name, anytime_odds, ags_combo_odds, ags_pct))
 
-        print(
-            f"Player: {display_name} — FGS: {fmt(single_odds)} | AGS(Anytime): {fmt(anytime_odds)} | AGS(combo: Anytime+Over0.5): {fmt(ags_combo_odds)} | FGS+AGS(combo): {fmt(fgs_combo_odds)} {note}"
-        )
+    # Sort and print clean grouped output
+    def pct_str(p):
+        try:
+            sign = '+' if p > 0 else ''
+            return f"{sign}{p:.2f}%"
+        except Exception:
+            return "None"
+
+    if fgs_results:
+        fgs_results.sort(key=lambda x: x[3], reverse=True)
+        print("FGS")
+        for name, orig, boosted, pct in fgs_results:
+            print(f"{name} {fmt(orig)} => {fmt(boosted)} ({pct_str(pct)})")
+        print("")
+
+    if ags_results:
+        ags_results.sort(key=lambda x: x[3], reverse=True)
+        print("AGS")
+        for name, orig, boosted, pct in ags_results:
+            print(f"{name} {fmt(orig)} => {fmt(boosted)} ({pct_str(pct)})")
+        print("")
 
     client.close()
 

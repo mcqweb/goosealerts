@@ -17,6 +17,11 @@ from betfair import Betfair
 from oc import get_oddschecker_match_slug, get_oddschecker_odds
 from willhill_betbuilder import get_odds, configure, BET_TYPES
 
+try:
+    from ladbrokes_alerts.client import LadbrokesAlerts
+except Exception:
+    LadbrokesAlerts = None
+
 
 # ========= INITIALIZATION =========
 
@@ -399,6 +404,7 @@ DISCORD_BOT_TOKEN   = os.getenv("DISCORD_BOT_TOKEN", "")
 DISCORD_GOOSE_CHANNEL_ID = os.getenv("DISCORD_GOOSE_CHANNEL_ID", "").strip()  # separate channel for goose alerts
 DISCORD_ARB_CHANNEL_ID   = os.getenv("DISCORD_ARB_CHANNEL_ID", "").strip()      # separate channel for arbitrage alerts
 DISCORD_WH_CHANNEL_ID   = os.getenv("DISCORD_WH_CHANNEL_ID", "").strip()      # separate channel for William Hill BB alerts
+DISCORD_LADBROKES_CHANNEL_ID   = os.getenv("DISCORD_LADBROKES_CHANNEL_ID", "").strip()      # separate channel for William Hill BB alerts
 DISCORD_ENABLED     = os.getenv("DISCORD_ENABLED", "1") == "1"      # enable/disable posting
 
 if NORD_USER and NORD_PWD and NORD_LOCATION:
@@ -414,11 +420,13 @@ TEST_PRICE_OFFSET = float(os.getenv("TEST_PRICE_OFFSET", "0"))
 GOOSE_STATE_FILE = "state/goose_alert_state.json"
 ARB_STATE_FILE = "state/arb_alert_state.json"
 WH_STATE_FILE = "state/WH_alert_state.json"
+LADBROKES_STATE_FILE = "state/lad_alert_state.json"
 
 # ========= CONFIG =========
 GBP_THRESHOLD_GOOSE  = float(os.getenv("GBP_THRESHOLD_GOOSE", "10"))
 GBP_ARB_THRESHOLD = float(os.getenv("GBP_ARB_THRESHOLD", "10"))
 GBP_WH_THRESHOLD = float(os.getenv("GBP_WH_THRESHOLD", "10"))
+GBP_LADBROKES_THRESHOLD = float(os.getenv("GBP_LADBROKES_THRESHOLD", "10"))
 GOOSE_MIN_ODDS      = float(os.getenv("GOOSE_MIN_ODDS", "1.2"))  # min odds for goose combos
 WINDOW_MINUTES   = int(os.getenv("WINDOW_MINUTES", "90"))    # KO window
 POLL_SECONDS      = int(os.getenv("POLL_SECONDS", "60"))    # How long should each loop wait
@@ -429,6 +437,7 @@ VERBOSE_TIMING = os.getenv("VERBOSE_TIMING", "0") == "1"  # Enable detailed timi
 ENABLE_VIRGIN_GOOSE = os.getenv("ENABLE_VIRGIN_GOOSE", "1") == "1"  # Virgin Bet combo (Goose) alerts
 ENABLE_ODDSCHECKER = os.getenv("ENABLE_ODDSCHECKER", "1") == "1"    # OddsChecker arbitrage alerts
 ENABLE_WILLIAMHILL = os.getenv("ENABLE_WILLIAMHILL", "1") == "1"    # William Hill bet builder alerts
+ENABLE_LADBROKES = os.getenv("ENABLE_LADBROKES", "0").lower() in ("1", "true", "yes")
 
 # WH combo pricing modes:
 # Mode 1 (default): Only fetch combo price if no cache exists OR base odds changed
@@ -798,6 +807,183 @@ def getGoosedCombos(match, player_data, delay_seconds=0, ignore_lineup=False):
         print('Error recording AGS combo result:', e)
 
     return back_odds_results
+
+
+def get_ladbrokes_player_combos(ladb_client, ladb_match_id, player_name, handicap="0.5"):
+    """Fetch ladbrokes drilldown and return AGS and FGS combo odds for a single player.
+
+    Returns a dict: {'ags_combo': float or None, 'fgs_combo': float or None}
+    """
+    if not ladb_client or not ladb_match_id:
+        return None
+
+    try:
+        drilldown = ladb_client.get_bet_ids_for_match(int(ladb_match_id), use_cache=True)
+        if not drilldown:
+            return None
+
+        # extract event bEId
+        event_bEId = ""
+        try:
+            ss = drilldown.get('SSResponse', {})
+            first = ss.get('children', [None])[0]
+            event = first.get('event', {})
+            ext = event.get('extIds', '')
+            if ext and ',' in ext:
+                parts = ext.split(',')
+                if len(parts) >= 2:
+                    event_bEId = parts[1]
+        except Exception:
+            event_bEId = ""
+
+        # find First Goalscorer and Anytime markets
+        def norm(n):
+            return ' '.join((n or '').strip().split()).lower()
+
+        first_goals = []
+        anytime_goals = []
+        over0 = None
+
+        ss = drilldown.get('SSResponse', {})
+        children = ss.get('children', [])
+        if not children:
+            return None
+        event = children[0].get('event', {})
+        for child in event.get('children', []):
+            if 'market' not in child:
+                continue
+            market = child['market']
+            mname = (market.get('name') or '').strip()
+            # First Goalscorer
+            if 'first goalscorer' in mname.lower():
+                for oc in market.get('children', []):
+                    if 'outcome' not in oc:
+                        continue
+                    o = oc['outcome']
+                    price = {}
+                    if 'children' in o and o['children']:
+                        p = o['children'][0].get('price', {})
+                        price = {'num': p.get('priceNum','0'), 'den': p.get('priceDen','1'), 'priceDec': p.get('priceDec')}
+                    out_ext = o.get('extIds','')
+                    bSId = ''
+                    if out_ext and ',' in out_ext:
+                        parts = out_ext.split(',')
+                        if len(parts) >= 2:
+                            bSId = parts[1]
+                    first_goals.append({'outcome_id': o.get('id'), 'name': o.get('name'), 'market_id': market.get('id'), 'sub_event_id': market.get('eventId'), 'bMId': (market.get('extIds') or '').split(',')[1] if (market.get('extIds') or '').count(',') else '', 'bSId': bSId, 'price': price})
+
+            # Anytime Goalscorer
+            if 'anytime goalscorer' in mname.lower() or 'anytime' in mname.lower():
+                for oc in market.get('children', []):
+                    if 'outcome' not in oc:
+                        continue
+                    o = oc['outcome']
+                    price = {}
+                    if 'children' in o and o['children']:
+                        p = o['children'][0].get('price', {})
+                        price = {'num': p.get('priceNum','0'), 'den': p.get('priceDen','1'), 'priceDec': p.get('priceDec')}
+                    out_ext = o.get('extIds','')
+                    bSId = ''
+                    if out_ext and ',' in out_ext:
+                        parts = out_ext.split(',')
+                        if len(parts) >= 2:
+                            bSId = parts[1]
+                    anytime_goals.append({'outcome_id': o.get('id'), 'name': o.get('name'), 'market_id': market.get('id'), 'sub_event_id': market.get('eventId'), 'bMId': (market.get('extIds') or '').split(',')[1] if (market.get('extIds') or '').count(',') else '', 'bSId': bSId, 'price': price})
+
+            # Exact Over/Under Total Goals 0.5
+            if mname == f"Over/Under Total Goals {handicap}":
+                for oc in market.get('children', []):
+                    if 'outcome' not in oc:
+                        continue
+                    o = oc['outcome']
+                    if o.get('name','').lower() != 'over':
+                        continue
+                    price = {}
+                    if 'children' in o and o['children']:
+                        p = o['children'][0].get('price', {})
+                        price = {'num': p.get('priceNum','0'), 'den': p.get('priceDen','1'), 'priceDec': p.get('priceDec')}
+                    out_ext = o.get('extIds','')
+                    bSId = ''
+                    if out_ext and ',' in out_ext:
+                        parts = out_ext.split(',')
+                        if len(parts) >= 2:
+                            bSId = parts[1]
+                    over0 = {'outcome_id': o.get('id'), 'name': o.get('name'), 'market_id': market.get('id'), 'sub_event_id': market.get('eventId'), 'bMId': (market.get('extIds') or '').split(',')[1] if (market.get('extIds') or '').count(',') else '', 'bSId': bSId, 'price': price, 'handicap': str(handicap)}
+
+        if not over0:
+            return None
+
+        # Build maps and perform fuzzy matching similar to WH logic
+        def name_parts(name):
+            parts = [p for p in re.split(r"[\s\-]+", (name or '').lower()) if len(p) > 1]
+            return set(parts)
+
+        # exact normalization lookup first
+        fmap = {norm(o.get('name')): o for o in first_goals}
+        amap = {norm(o.get('name')): o for o in anytime_goals}
+        target_norm = norm(player_name)
+
+        f = None
+        a = None
+
+        if target_norm in fmap:
+            f = fmap[target_norm]
+        if target_norm in amap:
+            a = amap[target_norm]
+
+        # If either is missing, attempt fuzzy match by token overlap
+        if not f:
+            best = None
+            best_score = 0.0
+            tparts = name_parts(player_name)
+            for o in first_goals:
+                oparts = name_parts(o.get('name'))
+                if not oparts or not tparts:
+                    continue
+                inter = len(tparts & oparts)
+                union = len(tparts | oparts)
+                score = inter / union if union > 0 else 0
+                if inter >= 2 or score >= 0.5:
+                    if score > best_score:
+                        best_score = score
+                        best = o
+            f = best
+
+        if not a:
+            best = None
+            best_score = 0.0
+            tparts = name_parts(player_name)
+            for o in anytime_goals:
+                oparts = name_parts(o.get('name'))
+                if not oparts or not tparts:
+                    continue
+                inter = len(tparts & oparts)
+                union = len(tparts | oparts)
+                score = inter / union if union > 0 else 0
+                if inter >= 2 or score >= 0.5:
+                    if score > best_score:
+                        best_score = score
+                        best = o
+            a = best
+
+        # If still missing either market for this player, bail out
+        if not f or not a:
+            return None
+        leg_a = ladb_client.create_leg_from_outcome(f, event_bEId=event_bEId)
+        leg_b = ladb_client.create_leg_from_outcome(a, event_bEId=event_bEId)
+        leg_over = ladb_client.create_leg_from_outcome(over0, event_bEId=event_bEId)
+
+        ags_payload = ladb_client.build_bet_request(int(ladb_match_id), [leg_b, leg_over])
+        ags_combo = ladb_client.get_back_odds(ags_payload)
+
+        fgs_payload = ladb_client.build_bet_request(int(ladb_match_id), [leg_a, leg_b])
+        fgs_combo = ladb_client.get_back_odds(fgs_payload)
+
+        return {'ags_combo': ags_combo, 'fgs_combo': fgs_combo}
+
+    except Exception as e:
+        print('Error fetching Ladbrokes combos for player', player_name, e)
+        return None
    
 def map_betfair_to_sites(betfair_id, target_sites=None):
     """Call the oddsmatcha API to map a Betfair match id to multiple target sites.
@@ -1231,7 +1417,36 @@ def main():
                         mnodes = m.get('market_nodes') or []
                         if mnodes:
                             # Fetch site mappings and exchange odds once per match
-                            mappings, oddsmatcha_match_id = map_betfair_to_sites(mid, ['virginbet', 'williamhill'])
+                            target_sites = ['virginbet', 'williamhill']
+                            if ENABLE_LADBROKES:
+                                target_sites.append('ladbrokes')
+                            mappings, oddsmatcha_match_id = map_betfair_to_sites(mid, target_sites)
+                            # Hardcoded Ladbrokes mappings: oddsmatcha_id -> ladbrokes_id
+                            try:
+                                ladb_map = {
+                                    3456: '253579498',
+                                    3369: '253514481',
+                                    3370: '253516595',
+                                    3371: '253512688',
+                                    3372: '253516594',
+                                    3373: '253512365',
+                                    3374: '253516703',
+                                    3375: '253516704',
+                                    3376: '253516852',
+                                    3377: '253517656',
+                                    3378: '253517655',
+                                }
+                                key = None
+                                try:
+                                    key = int(oddsmatcha_match_id) if oddsmatcha_match_id is not None else None
+                                except Exception:
+                                    key = None
+                                if key in ladb_map:
+                                    mappings = dict(mappings or {})
+                                    mappings['ladbrokes'] = ladb_map[key]
+                                    print(f"[LADBROKES] Applied hardcoded mapping for oddsmatcha {key} -> {ladb_map[key]}")
+                            except Exception:
+                                pass
                             exchange_odds = {}
                             confirmed_starters = set()
                             if oddsmatcha_match_id:
@@ -1285,6 +1500,15 @@ def main():
                                     print(f"No WH mapping for Betfair {mid}; skipping all WH checks for this match")
                             
                             # build supported_markets mapping from nodes
+                            # Initialize Ladbrokes client once per match if enabled
+                            ladbrokes_client = None
+                            ladbrokes_match_id = mappings.get('ladbrokes')
+                            if ENABLE_LADBROKES and ladbrokes_match_id and LadbrokesAlerts is not None:
+                                try:
+                                    ladbrokes_client = LadbrokesAlerts()
+                                    print(f"[LADBROKES] Initialized client for match {ladbrokes_match_id}")
+                                except Exception as e:
+                                    print(f"Failed to init Ladbrokes client: {e}")
                             supported = {}
                             for node in mnodes:
                                 desc = node.get('description', {}) if isinstance(node, dict) else {}
@@ -1370,6 +1594,7 @@ def main():
                                                         print(f"Player: {player_data['name']} | Back Odds: {back_odds} | Lay Odds: {price}")
                                                     else:
                                                         print('Combo Odds: no result')
+
                                                     if (back_odds+TEST_PRICE_OFFSET) > price:
                                                         rating = round(back_odds / price * 100, 2)
                                                         title = f"{pname} - {back_odds}/{price} ({rating}%)"
@@ -1572,6 +1797,64 @@ def main():
                                                 traceback.print_exc()
                                                 continue
         
+                                                            # Also attempt Ladbrokes combos if configured
+                                        if ENABLE_LADBROKES and 'ladbrokes_client' in locals() and ladbrokes_client and ladbrokes_match_id:
+
+                                            lb = get_ladbrokes_player_combos(ladbrokes_client, ladbrokes_match_id, pname)
+                                            if lb:
+                                                if mtype == betfair.FGS_MARKET_NAME:
+                                                    bettype = "First Goalscorer"
+                                                    label = "FGS"
+                                                    odds = lb.get('fgs_combo',0)
+                                                elif mtype == betfair.AGS_MARKET_NAME:
+                                                    bettype = "Anytime Goalscorer"
+                                                    label = "AGS"
+                                                    odds = lb.get('ags_combo',0)
+                                                else:
+                                                    continue
+                                                #print(f"  [LADBROKES] {pname} - AGS(combo): {lb.get('ags_combo')} | FGS+AGS(combo): {lb.get('fgs_combo')}")
+                                                
+                                                betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
+                                                if already_alerted(pname, ladbrokes_match_id, LADBROKES_STATE_FILE, market=label):
+                                                    continue
+                                                if DISCORD_LADBROKES_CHANNEL_ID:
+                                                    #print(betfair_lay_bet)
+                                                    print(f"Comparison: {pname} {label} - Ladbrokes Odds: {odds} vs Lay Odds: {price}")
+                                                    # Handle None/non-numeric odds safely
+                                                    try:
+                                                        valid_odds = isinstance(odds, (int, float))
+                                                        valid_price = isinstance(price, (int, float)) and price > 0
+                                                    except Exception:
+                                                        valid_odds = valid_price = False
+                                                    if valid_odds and valid_price and odds >= price:
+                                                        # compute rating defensively
+                                                        try:
+                                                            rating = round(odds / price * 100, 2)
+                                                        except Exception:
+                                                            rating = 0
+                                                        title = f"[LAD] {pname} - {label} - {odds}/{price} ({rating}%)"
+                                                        
+                                                        # Build description with optional Confirmed Starter
+                                                        starter_line = ""
+                                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                                            starter_line = "\nConfirmed Starter ✅"
+                                                        
+                                                        desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
+                                                        fields = []
+                                                        
+                                                        # Add confirmed starter field if applicable
+                                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                                            fields.append(("Confirmed Starter", "✅"))
+                                                        #build footer
+                                                        if label == "FGS":
+                                                            footer_text = f"{pname} FGS + AGS"
+                                                        elif label == "AGS":
+                                                            footer_text = f"{pname} AGS + Over 0.5 Goals"
+                                                        send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_LADBROKES_CHANNEL_ID, footer=footer_text)
+                                                        save_state(f"{pname}_{label}", ladbrokes_match_id, LADBROKES_STATE_FILE)
+
+
+
         loop_time = time.time() - loop_start
         print(f"[TIMING] Loop completed in {loop_time:.2f}s - {total_matches_checked} matches, {total_players_processed} players")
         print(f"Sleeping for {POLL_SECONDS}s...")

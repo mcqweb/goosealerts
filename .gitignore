@@ -49,4 +49,4 @@ willhill_betbuilder/config.example.json
 wh_odds_tracking/
 williamhill_session.txt
 cookies/william_hill.txt
-ladbrokes_drilldown_253579498.json
+ladbrokes_*.json
