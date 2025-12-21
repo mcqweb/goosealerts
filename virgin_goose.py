@@ -438,6 +438,8 @@ ENABLE_VIRGIN_GOOSE = os.getenv("ENABLE_VIRGIN_GOOSE", "1") == "1"  # Virgin Bet
 ENABLE_ODDSCHECKER = os.getenv("ENABLE_ODDSCHECKER", "1") == "1"    # OddsChecker arbitrage alerts
 ENABLE_WILLIAMHILL = os.getenv("ENABLE_WILLIAMHILL", "1") == "1"    # William Hill bet builder alerts
 ENABLE_LADBROKES = os.getenv("ENABLE_LADBROKES", "0").lower() in ("1", "true", "yes")
+# Enable fetching additional exchange odds (from Oddsmatcha). Set to '0' to disable.
+ENABLE_ADDITIONAL_EXCHANGES = os.getenv("ENABLE_ADDITIONAL_EXCHANGES", "1").lower() in ("1", "true", "yes")
 
 # WH combo pricing modes:
 # Mode 1 (default): Only fetch combo price if no cache exists OR base odds changed
@@ -1500,12 +1502,14 @@ def main():
                             exchange_odds = {}
                             confirmed_starters = set()
                             if oddsmatcha_match_id:
-                                exchange_odds = fetch_exchange_odds(oddsmatcha_match_id)
-                                if exchange_odds:
-                                    total_exchange_players = sum(len(players) for players in exchange_odds.values())
-                                    print(f"    [EXCHANGE] Loaded odds for {total_exchange_players} players from alternative exchanges")
-                                
-                                # Fetch confirmed starters
+                                # Optionally fetch additional exchange odds for debugging/augmentation
+                                if ENABLE_ADDITIONAL_EXCHANGES:
+                                    exchange_odds = fetch_exchange_odds(oddsmatcha_match_id)
+                                    if exchange_odds:
+                                        total_exchange_players = sum(len(players) for players in exchange_odds.values())
+                                        print(f"    [EXCHANGE] Loaded odds for {total_exchange_players} players from alternative exchanges")
+
+                                # Fetch confirmed starters (lineups) regardless of exchanges
                                 confirmed_starters = fetch_lineups(oddsmatcha_match_id)
                             
                             # Fetch OddsChecker match slug once per match (for ARB alerts)
