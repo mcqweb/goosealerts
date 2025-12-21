@@ -1290,6 +1290,8 @@ def fetch_exchange_odds(oddsmatcha_match_id):
                     'site_name': site_name.capitalize() if site_name else site_name,
                     'lay_odds': float(lay_odds),
                     'last_updated': last_updated_str
+                    ,
+                    'raw': odd
                 })
                 #print(f"[DEBUG] Added {outcome_name} on {site_name} @ {lay_odds}")
         
@@ -1336,10 +1338,11 @@ def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type):
         for site_odd in site_odds_list:
             combined.append({
                 'player_name': player_name,
-                'site': site_odd['site_name'],
-                'lay_odds': site_odd['lay_odds'],
+                'site': site_odd.get('site_name'),
+                'lay_odds': site_odd.get('lay_odds'),
                 'lay_size': None,
-                'has_size': False
+                'has_size': False,
+                'raw': site_odd.get('raw', site_odd)
             })
     
     return combined
@@ -1455,8 +1458,10 @@ def main():
                     ko_str = kt.strftime("%H:%M")
                     now_utc = datetime.now(timezone.utc)
                     # consider matches within the next x minutes (inclusive)
-                    if now_utc <= kt <= now_utc + timedelta(minutes=WINDOW_MINUTES):
-                        print(f"    -> Match within next {WINDOW_MINUTES} minutes; fetching odds...")
+                    # compute minutes until kickoff and respect WINDOW_MINUTES
+                    minutes_until = (kt - now_utc).total_seconds() / 60.0
+                    if 0 <= minutes_until <= WINDOW_MINUTES:
+                        print(f"    -> Match within next {WINDOW_MINUTES} minutes; fetching odds... (in {minutes_until:.1f}m)")
                         # If the fetch_matches_for_competition response included market_nodes with TO_SCORE markets,
                         # call _fetch_market_odds directly using the known market id(s).
                         mnodes = m.get('market_nodes') or []
@@ -1808,31 +1813,35 @@ def main():
                                                     
                                                     # Send separate WH message if configured
                                                     if DISCORD_WH_CHANNEL_ID:
-                                                        if boosted_odds >= float(betfair_lay_bet[0]['lay_odds']):
-                                                            rating = round(boosted_odds / price * 100, 2)
-                                                            title = f"{pname} - {label} - {boosted_odds}/{price} ({rating}%)"
-                                                            
-                                                            # Build description with optional Confirmed Starter
-                                                            starter_line = ""
-                                                            if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
-                                                                starter_line = "\nConfirmed Starter ✅"
-                                                            
-                                                            desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
-                                                            fields = []
-                                                            
-                                                            # Add confirmed starter field if applicable
-                                                            if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
-                                                                fields.append(("Confirmed Starter", "✅"))
-                                                            #build footer
-                                                            if label == "FGS":
-                                                                footer_text = f"{pname} FGS + AGS + Over 0.5 Goals"
-                                                            elif label == "AGS":
-                                                                footer_text = f"{pname} AGS + G/A + Over 0.5 Goals"
-                                                            send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID, footer=footer_text)
-                                                            save_state(f"{pname}_{label}", wh_match_id, WH_STATE_FILE)
-                                                            print(f"[WH ALERT] {pname} {label} @ {boosted_odds} (rating: {rating}%)")
+                                                        # Require lineup confirmation before sending WH alert
+                                                        if not confirmed_starters:
+                                                            print(f"[WH] Skipping alert for {pname} - no lineup data available")
+                                                        elif not is_confirmed_starter(pname, confirmed_starters):
+                                                            print(f"[WH] Skipping alert for {pname} - not in confirmed starters")
                                                         else:
-                                                            print(f"[WH] No alert - WH odds {boosted_odds} < Lay {price}")
+                                                            if boosted_odds >= float(betfair_lay_bet[0]['lay_odds']):
+                                                                rating = round(boosted_odds / price * 100, 2)
+                                                                title = f"{pname} - {label} - {boosted_odds}/{price} ({rating}%)"
+
+                                                                # Build description with optional Confirmed Starter
+                                                                starter_line = "\nConfirmed Starter ✅"
+
+                                                                desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
+                                                                fields = []
+
+                                                                # Add confirmed starter field if applicable
+                                                                if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                                                    fields.append(("Confirmed Starter", "✅"))
+                                                                #build footer
+                                                                if label == "FGS":
+                                                                    footer_text = f"{pname} FGS + AGS + Over 0.5 Goals"
+                                                                elif label == "AGS":
+                                                                    footer_text = f"{pname} AGS + G/A + Over 0.5 Goals"
+                                                                send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID, footer=footer_text)
+                                                                save_state(f"{pname}_{label}", wh_match_id, WH_STATE_FILE)
+                                                                print(f"[WH ALERT] {pname} {label} @ {boosted_odds} (rating: {rating}%)")
+                                                            else:
+                                                                print(f"[WH] No alert - WH odds {boosted_odds} < Lay {price}")
                                                 else:
                                                     print(f"[WH] Failed to get price for {pname} {label}")
                                                     continue
@@ -1872,31 +1881,34 @@ def main():
                                                     except Exception:
                                                         valid_odds = valid_price = False
                                                     if valid_odds and valid_price and odds >= price:
-                                                        # compute rating defensively
-                                                        try:
-                                                            rating = round(odds / price * 100, 2)
-                                                        except Exception:
-                                                            rating = 0
-                                                        title = f"[LAD] {pname} - {label} - {odds}/{price} ({rating}%)"
-                                                        
-                                                        # Build description with optional Confirmed Starter
-                                                        starter_line = ""
-                                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                                        # ensure lineup confirmation before sending Ladbrokes alert
+                                                        if not confirmed_starters:
+                                                            print(f"[LAD] Skipping alert for {pname} - no lineup data available")
+                                                        elif not is_confirmed_starter(pname, confirmed_starters):
+                                                            print(f"[LAD] Skipping alert for {pname} - not in confirmed starters")
+                                                        else:
+                                                            # compute rating defensively
+                                                            try:
+                                                                rating = round(odds / price * 100, 2)
+                                                            except Exception:
+                                                                rating = 0
+                                                            title = f"[LAD] {pname} - {label} - {odds}/{price} ({rating}%)"
+
+                                                            # Build description with optional Confirmed Starter
                                                             starter_line = "\nConfirmed Starter ✅"
-                                                        
-                                                        desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
-                                                        fields = []
-                                                        
-                                                        # Add confirmed starter field if applicable
-                                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+
+                                                            desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
+                                                            fields = []
+
+                                                            # Add confirmed starter field
                                                             fields.append(("Confirmed Starter", "✅"))
-                                                        #build footer
-                                                        if label == "FGS":
-                                                            footer_text = f"{pname} FGS + AGS"
-                                                        elif label == "AGS":
-                                                            footer_text = f"{pname} AGS + Over 0.5 Goals"
-                                                        send_discord_embed(title, desc, fields, colour=0xFF0000, channel_id=DISCORD_LADBROKES_CHANNEL_ID, footer=footer_text)
-                                                        save_state(f"{pname}_{label}", ladbrokes_match_id, LADBROKES_STATE_FILE)
+                                                            #build footer
+                                                            if label == "FGS":
+                                                                footer_text = f"{pname} FGS + AGS"
+                                                            elif label == "AGS":
+                                                                footer_text = f"{pname} AGS + Over 0.5 Goals"
+                                                            send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_LADBROKES_CHANNEL_ID, footer=footer_text)
+                                                            save_state(f"{pname}_{label}", ladbrokes_match_id, LADBROKES_STATE_FILE)
 
 
 
