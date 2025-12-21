@@ -973,11 +973,58 @@ def get_ladbrokes_player_combos(ladb_client, ladb_match_id, player_name, handica
         leg_b = ladb_client.create_leg_from_outcome(a, event_bEId=event_bEId)
         leg_over = ladb_client.create_leg_from_outcome(over0, event_bEId=event_bEId)
 
+        # Prepare stable price keys for each leg (prefer priceDec)
+        def _price_key(outcome_obj):
+            try:
+                p = outcome_obj.get('price', {})
+                dec = p.get('priceDec')
+                if dec is not None:
+                    return str(dec)
+                num = p.get('num')
+                den = p.get('den')
+                return f"{num}/{den}"
+            except Exception:
+                return ''
+
+        # Cache path per match + outcome ids
+        try:
+            oids = [str(f.get('outcome_id')), str(a.get('outcome_id')), str(over0.get('outcome_id'))]
+        except Exception:
+            oids = [str(f.get('outcome_id') or ''), str(a.get('outcome_id') or ''), str(over0.get('outcome_id') or '')]
+
+        cache_dir = os.path.join(BASE_DIR, 'cache', 'ladbrokes_prices')
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+        except Exception:
+            pass
+
+        cache_file = os.path.join(cache_dir, f"{ladb_match_id}_{'_'.join(oids)}.json")
+
+        current_legs = {'f': _price_key(f), 'a': _price_key(a), 'over': _price_key(over0)}
+
+        # Try return cached combos if leg prices unchanged
+        try:
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r', encoding='utf-8') as cf:
+                    cached = json.load(cf)
+                if cached.get('legs') == current_legs:
+                    return {'ags_combo': cached.get('ags_combo'), 'fgs_combo': cached.get('fgs_combo')}
+        except Exception:
+            pass
+
+        # Build and fetch combos (cache miss or legs changed)
         ags_payload = ladb_client.build_bet_request(int(ladb_match_id), [leg_b, leg_over])
         ags_combo = ladb_client.get_back_odds(ags_payload)
 
         fgs_payload = ladb_client.build_bet_request(int(ladb_match_id), [leg_a, leg_b])
         fgs_combo = ladb_client.get_back_odds(fgs_payload)
+
+        # Save cache
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as cf:
+                json.dump({'ts': time.time(), 'legs': current_legs, 'ags_combo': ags_combo, 'fgs_combo': fgs_combo}, cf, indent=2)
+        except Exception:
+            pass
 
         return {'ags_combo': ags_combo, 'fgs_combo': fgs_combo}
 
@@ -1074,10 +1121,10 @@ def is_match_in_wh_offer(wh_match_id, offer_id=1):
 
 def fetch_lineups(oddsmatcha_match_id):
     """Fetch starting lineups from OddsMatcha API.
-    
+
     Args:
         oddsmatcha_match_id: The oddsmatcha match ID
-    
+
     Returns:
         Set of player names who are confirmed starters, or empty set if unavailable
     """
@@ -1107,21 +1154,19 @@ def fetch_lineups(oddsmatcha_match_id):
             return set()
 
         starters = set()
-
-        # Extract player names from both lineups
         home_lineup = (data.get('home_lineup') or {}).get('line_up', [])
         away_lineup = (data.get('away_lineup') or {}).get('line_up', [])
-        
+
         for player in home_lineup + away_lineup:
             name = player.get('name', '').strip()
             if name:
                 starters.add(name)
-        
+
         if starters:
             print(f"[LINEUPS] Fetched {len(starters)} confirmed starters for match {oddsmatcha_match_id}")
-        
+
         return starters
-        
+
     except Exception as e:
         print(f"[LINEUPS] Error fetching lineups for match {oddsmatcha_match_id}: {e}")
         return set()
@@ -1850,7 +1895,7 @@ def main():
                                                             footer_text = f"{pname} FGS + AGS"
                                                         elif label == "AGS":
                                                             footer_text = f"{pname} AGS + Over 0.5 Goals"
-                                                        send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_LADBROKES_CHANNEL_ID, footer=footer_text)
+                                                        send_discord_embed(title, desc, fields, colour=0xFF0000, channel_id=DISCORD_LADBROKES_CHANNEL_ID, footer=footer_text)
                                                         save_state(f"{pname}_{label}", ladbrokes_match_id, LADBROKES_STATE_FILE)
 
 
