@@ -1287,13 +1287,28 @@ def fetch_exchange_odds(oddsmatcha_match_id):
                 # Store the odds
                 if outcome_name not in result[market_name]:
                     result[market_name][outcome_name] = []
-                
+
+                # Extract optional liquidity fields if provided by the exchange API
+                liquidity_val = None
+                try:
+                    # common possible keys: 'liquidity', 'available', 'size', 'lay_size', 'available_liquidity'
+                    for k in ('liquidity', 'available', 'size', 'lay_size', 'available_liquidity'):
+                        if k in odd and odd.get(k) is not None:
+                            try:
+                                liquidity_val = float(odd.get(k))
+                            except Exception:
+                                liquidity_val = None
+                            break
+                except Exception:
+                    liquidity_val = None
+
                 result[market_name][outcome_name].append({
                     'site_name': site_name.capitalize() if site_name else site_name,
                     'lay_odds': float(lay_odds),
-                    'last_updated': last_updated_str
-                    ,
-                    'raw': odd
+                    'last_updated': last_updated_str,
+                    'raw': odd,
+                    'norm': normalize_name(outcome_name) if outcome_name else '',
+                    'liquidity': liquidity_val
                 })
                 #print(f"[DEBUG] Added {outcome_name} on {site_name} @ {lay_odds}")
         
@@ -1332,6 +1347,8 @@ def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type):
             'lay_odds': float(odd.get('odds', 0)),
             'lay_size': float(odd.get('size', 0)),
             'has_size': True
+            ,
+            'norm_name': normalize_name(odd.get('outcome', '') )
         })
     
     # Add exchange odds
@@ -1341,10 +1358,13 @@ def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type):
             combined.append({
                 'player_name': player_name,
                 'site': site_odd.get('site_name'),
-                'lay_odds': site_odd.get('lay_odds'),
-                'lay_size': None,
-                'has_size': False,
-                'raw': site_odd.get('raw', site_odd)
+                'lay_odds': float(site_odd.get('lay_odds') or 0),
+                'lay_size': (site_odd.get('liquidity') if site_odd.get('liquidity') is not None else None),
+                'has_size': True if site_odd.get('liquidity') is not None else False,
+                'raw': site_odd.get('raw', site_odd),
+                'norm_name': site_odd.get('norm') or normalize_name(player_name),
+                'source_outcome': player_name,
+                'source_liquidity': site_odd.get('liquidity')
             })
     
     return combined
