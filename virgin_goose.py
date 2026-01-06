@@ -1259,8 +1259,12 @@ def fetch_exchange_odds(oddsmatcha_match_id):
                 outcome_name = odd.get('outcome_name')
                 last_updated_str = odd.get('last_updated')
                 
-                # Skip if no lay odds, if it's betfair, or if missing data
-                if not lay_odds or site_name == 'betfair' or not outcome_name:
+                # Skip if no lay odds, if it's betfair (already handled separately), or if missing data
+                if not lay_odds or not outcome_name:
+                    continue
+                
+                # Skip betfair - we already have betfair odds from the main betfair feed
+                if site_name and site_name.lower() == 'betfair':
                     continue
                 
                 # Skip if data is older than 5 minutes
@@ -1288,18 +1292,13 @@ def fetch_exchange_odds(oddsmatcha_match_id):
                 if outcome_name not in result[market_name]:
                     result[market_name][outcome_name] = []
 
-                # Extract optional liquidity fields if provided by the exchange API
+                # Extract liquidity from the lay_liquidity field
                 liquidity_val = None
                 try:
-                    # common possible keys: 'liquidity', 'available', 'size', 'lay_size', 'available_liquidity'
-                    for k in ('liquidity', 'available', 'size', 'lay_size', 'available_liquidity'):
-                        if k in odd and odd.get(k) is not None:
-                            try:
-                                liquidity_val = float(odd.get(k))
-                            except Exception:
-                                liquidity_val = None
-                            break
-                except Exception:
+                    lay_liquidity = odd.get('lay_liquidity')
+                    if lay_liquidity is not None:
+                        liquidity_val = float(lay_liquidity)
+                except (ValueError, TypeError):
                     liquidity_val = None
 
                 result[market_name][outcome_name].append({
@@ -1528,6 +1527,15 @@ def main():
                                     if exchange_odds:
                                         total_exchange_players = sum(len(players) for players in exchange_odds.values())
                                         print(f"    [EXCHANGE] Loaded odds for {total_exchange_players} players from alternative exchanges")
+                                        # Output detailed exchange odds by market and player
+                                        for market_type, players_dict in exchange_odds.items():
+                                            for player_name, odds_list in players_dict.items():
+                                                for odd in odds_list:
+                                                    site_name = odd.get('site_name', 'Unknown')
+                                                    lay_odds = odd.get('lay_odds', 'N/A')
+                                                    liquidity = odd.get('liquidity', 'None')
+                                                    liquidity_str = f"£{int(liquidity)}" if liquidity else "None"
+                                                    print(f"      - {player_name} ({market_type}): {site_name} @ {lay_odds} (Liquidity: {liquidity_str})")
 
                                 # Fetch confirmed starters (lineups) regardless of exchanges
                                 confirmed_starters = fetch_lineups(oddsmatcha_match_id)
@@ -1634,7 +1642,7 @@ def main():
                                                 all_lay_prices.append(f"{site} @ {odds}")
                                         lay_prices_text = " | ".join(all_lay_prices)
                                         
-                                        # GOOSE ALERTS (only for Betfair with size)
+                                        # GOOSE ALERTS (only for Betfair with size and confirmed starters)
                                         if ENABLE_VIRGIN_GOOSE and mtype == betfair.AGS_MARKET_NAME and has_size and lay_size >= GBP_THRESHOLD_GOOSE:
                                             skip = False
                                             if price < GOOSE_MIN_ODDS:
@@ -1643,6 +1651,9 @@ def main():
                                             if not virgin_id:
                                                 skip = True
                                             if already_alerted(pname,mid,GOOSE_STATE_FILE):
+                                                skip = True
+                                            # Only alert if player is a confirmed starter
+                                            if confirmed_starters and not is_confirmed_starter(pname, confirmed_starters):
                                                 skip = True
                                             if not skip:
                                                 virgin_markets = getVirginMarkets(virgin_id)
