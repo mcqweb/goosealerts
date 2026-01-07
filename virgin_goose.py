@@ -421,7 +421,7 @@ GOOSE_STATE_FILE = "state/goose_alert_state.json"
 ARB_STATE_FILE = "state/arb_alert_state.json"
 WH_STATE_FILE = "state/WH_alert_state.json"
 LADBROKES_STATE_FILE = "state/lad_alert_state.json"
-
+GOOSE_FOOTER_ICON_URL = "https://img.icons8.com/?size=100&id=CXvbGFYLkaMY&format=png&color=000000"
 # ========= CONFIG =========
 GBP_THRESHOLD_GOOSE  = float(os.getenv("GBP_THRESHOLD_GOOSE", "10"))
 GBP_ARB_THRESHOLD = float(os.getenv("GBP_ARB_THRESHOLD", "10"))
@@ -447,7 +447,7 @@ ENABLE_ADDITIONAL_EXCHANGES = os.getenv("ENABLE_ADDITIONAL_EXCHANGES", "1").lowe
 WH_PRICING_MODE = int(os.getenv("WH_PRICING_MODE", "1"))  # 1 or 2
 
 # ========= DISCORD =========
-def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=None, footer=None):
+def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=None, footer=None,icon=None):
     if not DISCORD_ENABLED:
         return
 
@@ -464,10 +464,10 @@ def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=N
     if footer:
         # 'footer' is now the dictionary key for the footer object
         # 'text' and 'icon_url' are keys within the footer object
-        if channel_id == DISCORD_GOOSE_CHANNEL_ID:
+        if icon:
             embed["footer"] = {
                 "text": footer, # Use the string passed to the function
-                "icon_url": 'https://img.icons8.com/?size=100&id=CXvbGFYLkaMY&format=png&color=000000'
+                "icon_url": icon
             }
         elif channel_id == DISCORD_WH_CHANNEL_ID:
             embed["footer"] = {
@@ -1166,6 +1166,8 @@ def fetch_lineups(oddsmatcha_match_id):
 
         if starters:
             print(f"[LINEUPS] Fetched {len(starters)} confirmed starters for match {oddsmatcha_match_id}")
+        else:
+            print(f"[LINEUPS] No starters found for match {oddsmatcha_match_id} (home: {len(home_lineup)}, away: {len(away_lineup)})")
 
         return starters
 
@@ -1539,6 +1541,7 @@ def main():
 
                                 # Fetch confirmed starters (lineups) regardless of exchanges
                                 confirmed_starters = fetch_lineups(oddsmatcha_match_id)
+                                print(f"    [DEBUG] Confirmed starters fetched: {len(confirmed_starters)} players - {confirmed_starters}")
                             
                             # Fetch OddsChecker match slug once per match (for ARB alerts)
                             match_slug = None
@@ -1552,7 +1555,8 @@ def main():
                             wh_match_id = mappings.get('williamhill')
                             wh_offer_checked = False
                             
-                            if ENABLE_WILLIAMHILL and wh_match_id:
+                            # Only fetch WH prices if we have lineup data
+                            if ENABLE_WILLIAMHILL and wh_match_id and confirmed_starters:
                                 
                                 if wh_match_id:
                                     # Check if match is in the WH offer
@@ -1655,6 +1659,7 @@ def main():
                                             # Only alert if player is a confirmed starter
                                             if confirmed_starters and not is_confirmed_starter(pname, confirmed_starters):
                                                 skip = True
+                                                print(f"      [DEBUG] {pname} is NOT a confirmed starter - skipping GOOSE alert")
                                             if not skip:
                                                 virgin_markets = getVirginMarkets(virgin_id)
                                                 player_data = find_player_sot_and_ga_ids(virgin_markets, pname)
@@ -1700,14 +1705,18 @@ def main():
                                                         fields = []
                                                         
                                                         # Add confirmed starter field if applicable
-                                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                                        is_confirmed = confirmed_starters and is_confirmed_starter(pname, confirmed_starters)
+                                                        if is_confirmed:
                                                             fields.append(("Confirmed Starter", "✅"))
+                                                            print(f"      [DEBUG] {pname} IS a confirmed starter - field added to embed")
+                                                        else:
+                                                            print(f"      [DEBUG] {pname} is NOT a confirmed starter - field NOT added (confirmed_starters={bool(confirmed_starters)})")
                                                                                 
                                                         embed_colour = 0xFF0000  # bright red for true arb
                                                         #print("ARBING")
                                                         if DISCORD_GOOSE_CHANNEL_ID:
                                                             #print("SENDING")
-                                                            send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT")
+                                                            send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT",icon=GOOSE_FOOTER_ICON_URL)
                                                         save_state(pname,mid, GOOSE_STATE_FILE)
                                         # ARB ALERTS
                                         if ENABLE_ODDSCHECKER and (not has_size or lay_size > GBP_ARB_THRESHOLD):
