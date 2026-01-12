@@ -405,6 +405,11 @@ DISCORD_GOOSE_CHANNEL_ID = os.getenv("DISCORD_GOOSE_CHANNEL_ID", "").strip()  # 
 DISCORD_ARB_CHANNEL_ID   = os.getenv("DISCORD_ARB_CHANNEL_ID", "").strip()      # separate channel for arbitrage alerts
 DISCORD_WH_CHANNEL_ID   = os.getenv("DISCORD_WH_CHANNEL_ID", "").strip()      # separate channel for William Hill BB alerts
 DISCORD_LADBROKES_CHANNEL_ID   = os.getenv("DISCORD_LADBROKES_CHANNEL_ID", "").strip()      # separate channel for William Hill BB alerts
+
+# Second Discord bot/channel for Smarkets-only WH alerts
+DISCORD_BOT_TOKEN_SMARKETS = os.getenv("DISCORD_BOT_TOKEN_SMARKETS", "")  # Can be same or different bot
+DISCORD_WH_SMARKETS_CHANNEL_ID = os.getenv("DISCORD_WH_SMARKETS_CHANNEL_ID", "").strip()  # Smarkets-only WH alerts
+
 DISCORD_ENABLED     = os.getenv("DISCORD_ENABLED", "1") == "1"      # enable/disable posting
 
 if NORD_USER and NORD_PWD and NORD_LOCATION:
@@ -420,6 +425,7 @@ TEST_PRICE_OFFSET = float(os.getenv("TEST_PRICE_OFFSET", "0"))
 GOOSE_STATE_FILE = "state/goose_alert_state.json"
 ARB_STATE_FILE = "state/arb_alert_state.json"
 WH_STATE_FILE = "state/WH_alert_state.json"
+WH_SMARKETS_STATE_FILE = "state/WH_smarkets_alert_state.json"  # Separate state for Smarkets-only alerts
 LADBROKES_STATE_FILE = "state/lad_alert_state.json"
 GOOSE_FOOTER_ICON_URL = "https://img.icons8.com/?size=100&id=CXvbGFYLkaMY&format=png&color=000000"
 # ========= CONFIG =========
@@ -447,7 +453,7 @@ ENABLE_ADDITIONAL_EXCHANGES = os.getenv("ENABLE_ADDITIONAL_EXCHANGES", "1").lowe
 WH_PRICING_MODE = int(os.getenv("WH_PRICING_MODE", "1"))  # 1 or 2
 
 # ========= DISCORD =========
-def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=None, footer=None,icon=None):
+def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=None, footer=None,icon=None, bot_token=None):
     if not DISCORD_ENABLED:
         return
 
@@ -469,7 +475,7 @@ def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=N
                 "text": footer, # Use the string passed to the function
                 "icon_url": icon
             }
-        elif channel_id == DISCORD_WH_CHANNEL_ID:
+        elif channel_id == DISCORD_WH_CHANNEL_ID or channel_id == DISCORD_WH_SMARKETS_CHANNEL_ID:
             embed["footer"] = {
                 "text": footer
                 
@@ -482,15 +488,17 @@ def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=N
         embed["timestamp"] = datetime.now(london).isoformat()
     payload = {"embeds": [embed], "content": ""}
 
+    # Use provided bot token or fall back to default
+    token = bot_token if bot_token else DISCORD_BOT_TOKEN
 
-    if not DISCORD_BOT_TOKEN:
-        print(f"[WARN] Discord not configured. Token set={bool(DISCORD_BOT_TOKEN)} channels={channel_id}")
+    if not token:
+        print(f"[WARN] Discord not configured. Token set={bool(token)} channels={channel_id}")
         return
 
     try:
         r = requests.post(
             f"https://discord.com/api/v10/channels/{channel_id}/messages",
-            headers={"Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+            headers={"Authorization": f"Bot {token}",
                         "Content-Type": "application/json"},
             json=payload, timeout=10
         )
@@ -1867,10 +1875,7 @@ def main():
                                                                 rating = round(boosted_odds / price * 100, 2)
                                                                 title = f"{pname} - {label} - {boosted_odds}/{price} ({rating}%)"
 
-                                                                # Build description with optional Confirmed Starter
-                                                                starter_line = "\nConfirmed Starter ✅"
-
-                                                                desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
+                                                                desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
                                                                 fields = []
 
                                                                 # Add confirmed starter field if applicable
@@ -1884,6 +1889,43 @@ def main():
                                                                 send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID, footer=footer_text)
                                                                 save_state(f"{pname}_{label}", wh_match_id, WH_STATE_FILE)
                                                                 print(f"[WH ALERT] {pname} {label} @ {boosted_odds} (rating: {rating}%)")
+                                                            
+                                                            # Send Smarkets-only alert if configured and Smarkets lay is available
+                                                            if DISCORD_WH_SMARKETS_CHANNEL_ID and not already_alerted(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE):
+                                                                # Check if Smarkets lay price is available
+                                                                has_smarkets = False
+                                                                smarkets_price = None
+                                                                smarkets_liquidity = None
+                                                                
+                                                                for exchange in player_exchanges:
+                                                                    if exchange['site'].lower() == 'smarkets':
+                                                                        has_smarkets = True
+                                                                        smarkets_price = exchange['lay_odds']
+                                                                        smarkets_liquidity = exchange['lay_size']
+                                                                        break
+                                                                
+                                                                if has_smarkets and boosted_odds >= smarkets_price:
+                                                                    # Build Smarkets-only description (no Betfair mention)
+                                                                    smarkets_lay_text = f"Smarkets @ {smarkets_price}"
+                                                                    if smarkets_liquidity:
+                                                                        smarkets_lay_text += f" (£{int(smarkets_liquidity)})"
+                                                                    
+                                                                    rating_sm = round(boosted_odds / smarkets_price * 100, 2)
+                                                                    title_sm = f"{pname} - {label} - {boosted_odds}/{smarkets_price} ({rating_sm}%)"
+                                                                    desc_sm = f"**{mname}** ({ko_str})\n{cname}\nConfirmed Starter ✅\n\n**Lay Price:** {smarkets_lay_text}"
+                                                                    
+                                                                    fields_sm = [("Confirmed Starter", "✅")]
+                                                                    
+                                                                    # Use same footer as main WH alert
+                                                                    footer_text_sm = footer_text
+                                                                    
+                                                                    send_discord_embed(title_sm, desc_sm, fields_sm, colour=0x00143C, 
+                                                                                     channel_id=DISCORD_WH_SMARKETS_CHANNEL_ID, 
+                                                                                     footer=footer_text_sm,
+                                                                                     bot_token=DISCORD_BOT_TOKEN_SMARKETS)
+                                                                    save_state(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE)
+                                                                    print(f"[WH SMARKETS ALERT] {pname} {label} @ {boosted_odds} vs Smarkets @ {smarkets_price} (rating: {rating_sm}%)")
+                                                            
                                                             else:
                                                                 print(f"[WH] No alert - WH odds {boosted_odds} < Lay {price}")
                                                 else:
