@@ -50,3 +50,8 @@ wh_odds_tracking/
 williamhill_session.txt
 cookies/william_hill.txt
 ladbrokes_*.json
+wh_rewards_response.json
+wh_football_boosts.json
+login_cookies_dump.json
+test_login_cookies.py
+test_required_cookies.py
