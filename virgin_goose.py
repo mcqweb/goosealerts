@@ -591,7 +591,7 @@ def normalize_name(s: str) -> str:
 # ========= PLAYER NAME MAPPING =========
 
 def load_player_mappings():
-    """Load manual player name mappings from JSON file.
+    """Load manual player name mappings from JSON file. Always reloads from disk.
     
     Returns:
         Dict with structure: {normalized_variation: preferred_name}
@@ -602,7 +602,9 @@ def load_player_mappings():
             with open(PLAYER_MAPPINGS_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 # Filter out comment keys (starting with _)
-                return {k: v for k, v in data.items() if not k.startswith('_')}
+                mappings = {k: v for k, v in data.items() if not k.startswith('_')}
+                # Normalize both keys and values for consistency
+                return {normalize_name(k): v for k, v in mappings.items()}
     except Exception as e:
         print(f"[WARN] Failed to load player mappings: {e}")
     return {}
@@ -653,18 +655,23 @@ def track_player_name(player_name, site_name, match_id=None):
             except Exception:
                 tracking_data = {}
         
-        # Normalize the name for grouping
+        # Check if this name has a mapping - if so, use the preferred name as the key
+        mappings = load_player_mappings()
         norm_name = normalize_name(player_name)
+        preferred_name = mappings.get(norm_name)
         
-        if norm_name not in tracking_data:
-            tracking_data[norm_name] = {
+        # Use preferred name as key if mapped, otherwise use normalized name
+        tracking_key = preferred_name if preferred_name else norm_name
+        
+        if tracking_key not in tracking_data:
+            tracking_data[tracking_key] = {
                 'raw_names': {},
                 'first_seen': datetime.now(timezone.utc).isoformat(),
                 'last_seen': datetime.now(timezone.utc).isoformat(),
                 'occurrence_count': 0
             }
         
-        entry = tracking_data[norm_name]
+        entry = tracking_data[tracking_key]
         
         # Track raw name by site
         if site_name not in entry['raw_names']:
@@ -720,6 +727,125 @@ def suggest_mappings_for_player(player_name, site_name):
         print(f"[WARN] Failed to suggest mappings for '{player_name}': {e}")
     
     return {}
+
+def consolidate_player_tracking():
+    """Consolidate tracking file entries based on manual mappings.
+    
+    After adding manual mappings, this merges tracking entries that map to the same
+    preferred name. For example, if both "erling haaland" and "erling braut haaland"
+    map to "Erling Haaland", their tracking data will be merged into one entry.
+    
+    Returns:
+        Dict with stats: {'merged_count': int, 'total_entries': int}
+    """
+    try:
+        # Load both files
+        mappings = load_player_mappings()
+        
+        if not os.path.exists(PLAYER_TRACKING_FILE):
+            print(f"[CONSOLIDATE] No tracking file found at {PLAYER_TRACKING_FILE}")
+            return {'merged_count': 0, 'total_entries': 0}
+        
+        with open(PLAYER_TRACKING_FILE, 'r', encoding='utf-8') as f:
+            tracking_data = json.load(f)
+        
+        if not mappings:
+            print(f"[CONSOLIDATE] No mappings found - nothing to consolidate")
+            return {'merged_count': 0, 'total_entries': len(tracking_data)}
+        
+        # Process entries: merge those with mappings into their target entries
+        new_tracking_data = {}
+        entries_to_merge = {}  # Maps (target_norm_key, preferred_name) -> [source_entries]
+        
+        # First pass: identify what needs to be merged
+        for norm_key, entry in tracking_data.items():
+            # Check if this key has a mapping to a different name
+            preferred_name = mappings.get(norm_key)
+            
+            if preferred_name:
+                # This entry maps to a preferred name
+                target_norm_key = normalize_name(preferred_name)
+                
+                # Check if target is different from source (don't merge to self)
+                if target_norm_key != norm_key:
+                    merge_key = (target_norm_key, preferred_name)
+                    if merge_key not in entries_to_merge:
+                        entries_to_merge[merge_key] = []
+                    entries_to_merge[merge_key].append((norm_key, entry))
+                else:
+                    # Maps to itself, keep as-is
+                    new_tracking_data[norm_key] = entry
+            else:
+                # No mapping, keep as-is
+                new_tracking_data[norm_key] = entry
+        
+        # Second pass: perform merges
+        for (target_norm_key, preferred_name), source_entries in entries_to_merge.items():
+            # Try to find existing entry by normalized key
+            existing_entry_key = None
+            for existing_key in new_tracking_data.keys():
+                if normalize_name(existing_key) == target_norm_key:
+                    existing_entry_key = existing_key
+                    break
+            
+            if existing_entry_key:
+                # Merge into existing entry
+                target_entry = new_tracking_data[existing_entry_key]
+            else:
+                # Create new entry using preferred name as key
+                target_entry = {
+                    'raw_names': {},
+                    'first_seen': None,
+                    'last_seen': None,
+                    'occurrence_count': 0
+                }
+                new_tracking_data[preferred_name] = target_entry
+            
+            # Merge all source entries into target
+            for source_key, source_entry in source_entries:
+                # Merge raw_names by site
+                for site, names in source_entry.get('raw_names', {}).items():
+                    if site not in target_entry['raw_names']:
+                        target_entry['raw_names'][site] = []
+                    for name in names:
+                        if name not in target_entry['raw_names'][site]:
+                            target_entry['raw_names'][site].append(name)
+                
+                # Update timestamps (earliest first_seen, latest last_seen)
+                source_first = source_entry.get('first_seen')
+                source_last = source_entry.get('last_seen')
+                
+                if source_first and (not target_entry['first_seen'] or source_first < target_entry['first_seen']):
+                    target_entry['first_seen'] = source_first
+                
+                if source_last and (not target_entry['last_seen'] or source_last > target_entry['last_seen']):
+                    target_entry['last_seen'] = source_last
+                
+                # Sum occurrence counts
+                target_entry['occurrence_count'] += source_entry.get('occurrence_count', 0)
+            
+            # Track which keys were merged
+            merged_keys = [source_key for source_key, _ in source_entries]
+            target_entry['merged_from'] = merged_keys
+        
+        # Calculate stats
+        original_count = len(tracking_data)
+        new_count = len(new_tracking_data)
+        merged_count = original_count - new_count
+        
+        # Save consolidated tracking file
+        tmp_file = PLAYER_TRACKING_FILE + '.tmp'
+        with open(tmp_file, 'w', encoding='utf-8') as f:
+            json.dump(new_tracking_data, f, indent=2, sort_keys=True)
+        os.replace(tmp_file, PLAYER_TRACKING_FILE)
+        
+        print(f"[CONSOLIDATE] Merged {merged_count} entries ({original_count} -> {new_count})")
+        return {'merged_count': merged_count, 'total_entries': new_count}
+        
+    except Exception as e:
+        print(f"[CONSOLIDATE] Error consolidating tracking data: {e}")
+        traceback.print_exc()
+        return {'merged_count': 0, 'total_entries': 0}
 
 def match_player_name_with_mapping(target_name, target_site, candidates, source_site, mappings=None):
     """Match a target player name against candidates, using mappings first then fuzzy matching.
@@ -1748,6 +1874,14 @@ def main():
         print(f"\n{'='*80}")
         print(f"Starting run #{run_number}")
         print(f"{'='*80}")
+        
+        # Consolidate player tracking based on latest mappings
+        try:
+            result = consolidate_player_tracking()
+            if result['merged_count'] > 0:
+                print(f"[CONSOLIDATE] Merged {result['merged_count']} player name entries")
+        except Exception as e:
+            print(f"[WARN] Failed to consolidate player tracking: {e}")
         # If the local date (Europe/London) has changed since the process started,
         # exit so the cron job can restart a fresh run for the new day.
         if datetime.now(london).date() != run_start_date:
