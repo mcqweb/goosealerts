@@ -261,6 +261,8 @@ def get_wh_base_goalscorer_odds(wh_client, wh_match_id):
                     class_to_market = {
                         'odds-market-1': 'FGS',  # First Goalscorer
                         'odds-market-2': 'AGS',  # Anytime Goalscorer
+                        'odds-market-3': 'TOM',  # Two or More
+                        'odds-market-4': 'HAT',  # Hat-trick
                     }
                     
                     buttons = section.find_all('button', {'data-player': True, 'data-odds': True})
@@ -428,6 +430,11 @@ WH_STATE_FILE = "state/WH_alert_state.json"
 WH_SMARKETS_STATE_FILE = "state/WH_smarkets_alert_state.json"  # Separate state for Smarkets-only alerts
 LADBROKES_STATE_FILE = "state/lad_alert_state.json"
 GOOSE_FOOTER_ICON_URL = "https://img.icons8.com/?size=100&id=CXvbGFYLkaMY&format=png&color=000000"
+
+# Player name mapping files
+PLAYER_MAPPINGS_FILE = "player_name_mappings.json"
+PLAYER_TRACKING_FILE = "data/player_name_tracking.json"
+
 # ========= CONFIG =========
 GBP_THRESHOLD_GOOSE  = float(os.getenv("GBP_THRESHOLD_GOOSE", "10"))
 GBP_ARB_THRESHOLD = float(os.getenv("GBP_ARB_THRESHOLD", "10"))
@@ -446,6 +453,8 @@ ENABLE_WILLIAMHILL = os.getenv("ENABLE_WILLIAMHILL", "1") == "1"    # William Hi
 ENABLE_LADBROKES = os.getenv("ENABLE_LADBROKES", "0").lower() in ("1", "true", "yes")
 # Enable fetching additional exchange odds (from Oddsmatcha). Set to '0' to disable.
 ENABLE_ADDITIONAL_EXCHANGES = os.getenv("ENABLE_ADDITIONAL_EXCHANGES", "1").lower() in ("1", "true", "yes")
+# Prefer websocket versions of exchange data when available (e.g., smarkets_ws over smarkets)
+PREFER_WEBSOCKET_DATA = os.getenv("PREFER_WEBSOCKET_DATA", "1").lower() in ("1", "true", "yes")
 
 # WH combo pricing modes:
 # Mode 1 (default): Only fetch combo price if no cache exists OR base odds changed
@@ -578,6 +587,224 @@ def normalize_name(s: str) -> str:
     s = " ".join(s.split())
 
     return s
+
+# ========= PLAYER NAME MAPPING =========
+
+def load_player_mappings():
+    """Load manual player name mappings from JSON file.
+    
+    Returns:
+        Dict with structure: {normalized_variation: preferred_name}
+        Example: {'b fernandes': 'Bruno Fernandes', 'bruno fernandes': 'Bruno Fernandes'}
+    """
+    try:
+        if os.path.exists(PLAYER_MAPPINGS_FILE):
+            with open(PLAYER_MAPPINGS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # Filter out comment keys (starting with _)
+                return {k: v for k, v in data.items() if not k.startswith('_')}
+    except Exception as e:
+        print(f"[WARN] Failed to load player mappings: {e}")
+    return {}
+
+def get_mapped_name(player_name, mappings=None):
+    """Check if a manual mapping exists for a player name.
+    
+    Args:
+        player_name: Player name to look up
+        mappings: Optional pre-loaded mappings dict
+    
+    Returns:
+        Preferred/canonical name if a mapping exists, None otherwise
+    """
+    if mappings is None:
+        mappings = load_player_mappings()
+    
+    # Normalize the input name to use as lookup key
+    norm_key = normalize_name(player_name)
+    
+    # Check if we have a mapping for this normalized name
+    if norm_key in mappings:
+        return mappings[norm_key]
+    
+    return None
+
+def track_player_name(player_name, site_name, match_id=None):
+    """Track a player name seen on a specific site for mapping suggestions.
+    
+    Args:
+        player_name: Raw player name as it appears on the site
+        site_name: Site identifier (e.g., 'betfair', 'williamhill', 'virgin')
+        match_id: Optional match ID for context
+    """
+    if not player_name or not site_name:
+        return
+    
+    try:
+        # Ensure data directory exists
+        os.makedirs(os.path.dirname(PLAYER_TRACKING_FILE), exist_ok=True)
+        
+        # Load existing tracking data
+        tracking_data = {}
+        if os.path.exists(PLAYER_TRACKING_FILE):
+            try:
+                with open(PLAYER_TRACKING_FILE, 'r', encoding='utf-8') as f:
+                    tracking_data = json.load(f)
+            except Exception:
+                tracking_data = {}
+        
+        # Normalize the name for grouping
+        norm_name = normalize_name(player_name)
+        
+        if norm_name not in tracking_data:
+            tracking_data[norm_name] = {
+                'raw_names': {},
+                'first_seen': datetime.now(timezone.utc).isoformat(),
+                'last_seen': datetime.now(timezone.utc).isoformat(),
+                'occurrence_count': 0
+            }
+        
+        entry = tracking_data[norm_name]
+        
+        # Track raw name by site
+        if site_name not in entry['raw_names']:
+            entry['raw_names'][site_name] = []
+        
+        # Add raw name if not already tracked for this site
+        if player_name not in entry['raw_names'][site_name]:
+            entry['raw_names'][site_name].append(player_name)
+        
+        # Update metadata
+        entry['last_seen'] = datetime.now(timezone.utc).isoformat()
+        entry['occurrence_count'] = entry.get('occurrence_count', 0) + 1
+        
+        # Save atomically
+        tmp_file = PLAYER_TRACKING_FILE + '.tmp'
+        with open(tmp_file, 'w', encoding='utf-8') as f:
+            json.dump(tracking_data, f, indent=2, sort_keys=True)
+        os.replace(tmp_file, PLAYER_TRACKING_FILE)
+        
+    except Exception as e:
+        # Don't let tracking failures break the main flow
+        print(f"[WARN] Failed to track player name '{player_name}' on {site_name}: {e}")
+
+def suggest_mappings_for_player(player_name, site_name):
+    """Suggest possible mappings for a player based on tracking data.
+    
+    Args:
+        player_name: Player name to find mappings for
+        site_name: Site the name came from
+    
+    Returns:
+        Dict of {other_site: [possible_names]} with matching normalized names
+    """
+    try:
+        if not os.path.exists(PLAYER_TRACKING_FILE):
+            return {}
+        
+        with open(PLAYER_TRACKING_FILE, 'r', encoding='utf-8') as f:
+            tracking_data = json.load(f)
+        
+        norm_name = normalize_name(player_name)
+        
+        if norm_name in tracking_data:
+            entry = tracking_data[norm_name]
+            # Return all site variations except the source site
+            suggestions = {}
+            for site, names in entry['raw_names'].items():
+                if site != site_name:
+                    suggestions[site] = names
+            return suggestions
+    
+    except Exception as e:
+        print(f"[WARN] Failed to suggest mappings for '{player_name}': {e}")
+    
+    return {}
+
+def match_player_name_with_mapping(target_name, target_site, candidates, source_site, mappings=None):
+    """Match a target player name against candidates, using mappings first then fuzzy matching.
+    
+    Args:
+        target_name: Player name we're trying to match
+        target_site: Site the target name is from
+        candidates: List of candidate names/objects to match against
+        source_site: Site the candidates are from
+        mappings: Optional pre-loaded mappings dict
+    
+    Returns:
+        Matched candidate or None
+    """
+    if not target_name or not candidates:
+        return None
+    
+    # Track the target name
+    track_player_name(target_name, target_site)
+    
+    # Load mappings if not provided
+    if mappings is None:
+        mappings = load_player_mappings()
+    
+    # First, check if target name has a manual mapping
+    mapped_name = get_mapped_name(target_name, mappings)
+    if mapped_name:
+        # Look for exact match in candidates using the mapped/preferred name
+        target_norm = normalize_name(mapped_name)
+        for candidate in candidates:
+            # Handle both string candidates and dict-like objects with 'name' key
+            cand_name = candidate if isinstance(candidate, str) else candidate.get('name', '')
+            track_player_name(cand_name, source_site)
+            
+            if normalize_name(cand_name) == target_norm:
+                return candidate
+    
+    # Also check if any candidate has a mapping that matches our target
+    for candidate in candidates:
+        cand_name = candidate if isinstance(candidate, str) else candidate.get('name', '')
+        track_player_name(cand_name, source_site)
+        
+        cand_mapped = get_mapped_name(cand_name, mappings)
+        if cand_mapped and mapped_name and normalize_name(cand_mapped) == normalize_name(mapped_name):
+            # Both map to same preferred name
+            return candidate
+    
+    # Fall back to fuzzy matching
+    target_norm = normalize_name(target_name)
+    
+    # Try exact normalized match first
+    for candidate in candidates:
+        cand_name = candidate if isinstance(candidate, str) else candidate.get('name', '')
+        track_player_name(cand_name, source_site)
+        
+        if normalize_name(cand_name) == target_norm:
+            return candidate
+    
+    # Fuzzy match by token overlap
+    def name_parts(name):
+        parts = set(re.split(r'[\s\-]+', (name or '').lower()))
+        return {p for p in parts if len(p) > 1}
+    
+    target_parts = name_parts(target_name)
+    best_match = None
+    best_score = 0.0
+    
+    for candidate in candidates:
+        cand_name = candidate if isinstance(candidate, str) else candidate.get('name', '')
+        cand_parts = name_parts(cand_name)
+        
+        if not cand_parts or not target_parts:
+            continue
+        
+        inter = len(target_parts & cand_parts)
+        union = len(target_parts | cand_parts)
+        score = inter / union if union > 0 else 0
+        
+        # 2+ matches or >50% match rate
+        if inter >= 2 or score >= 0.5:
+            if score > best_score:
+                best_score = score
+                best_match = candidate
+    
+    return best_match
 
 def getVirginMarkets(virgin_id):
     cache_dir = os.path.join(BASE_DIR, 'cache')
@@ -1170,6 +1397,8 @@ def fetch_lineups(oddsmatcha_match_id):
         for player in home_lineup + away_lineup:
             name = player.get('name', '').strip()
             if name:
+                # Track lineup names under 'lineup' site
+                track_player_name(name, 'lineup')
                 starters.add(name)
 
         if starters:
@@ -1184,30 +1413,50 @@ def fetch_lineups(oddsmatcha_match_id):
         return set()
 
 def is_confirmed_starter(player_name, starters):
-    """Check if a player is a confirmed starter using fuzzy matching.
+    """Check if a player is a confirmed starter using manual mappings first, then fuzzy matching.
     
     Args:
         player_name: Player name to check
         starters: Set of confirmed starter names
     
     Returns:
-        True if player name matches a starter (exact or fuzzy), False otherwise
+        True if player name matches a starter (mapped, exact, or fuzzy), False otherwise
     """
     import re
     
-    # Try exact match first
+    if not player_name or not starters:
+        return False
+    
+    # Load manual mappings
+    mappings = load_player_mappings()
+    
+    # Check if player_name has a manual mapping
+    mapped_player = get_mapped_name(player_name, mappings)
+    
+    # Try exact match first (with both original and mapped names)
     if player_name in starters:
         return True
+    if mapped_player and mapped_player in starters:
+        return True
+    
+    # Check if any starter has a mapping that matches our player
+    if mapped_player:
+        for starter in starters:
+            mapped_starter = get_mapped_name(starter, mappings)
+            if mapped_starter and normalize_name(mapped_starter) == normalize_name(mapped_player):
+                return True
     
     # Fuzzy match: split on spaces and hyphens, match 2+ parts
-    def normalize_name(name):
+    def name_parts(name):
         parts = set(re.split(r'[\s\-]+', name.lower()))
         return {p for p in parts if len(p) > 1}
     
-    player_parts = normalize_name(player_name)
+    player_parts = name_parts(player_name)
+    if mapped_player:
+        player_parts = player_parts | name_parts(mapped_player)
     
     for starter in starters:
-        starter_parts = normalize_name(starter)
+        starter_parts = name_parts(starter)
         matches = len(player_parts & starter_parts)
         total_parts = len(player_parts | starter_parts)
         
@@ -1254,8 +1503,8 @@ def fetch_exchange_odds(oddsmatcha_match_id):
         for market in data:
             market_name = market.get('market_name', '')
             
-            # Only interested in goalscorer markets
-            if market_name not in ['Anytime Goalscorer', 'First Goalscorer']:
+            # Only interested in goalscorer markets (including TOM and HAT)
+            if market_name not in ['Anytime Goalscorer', 'First Goalscorer', 'Two or More Goals', 'Hat-trick']:
                 continue
             
             #print(f"[DEBUG] Processing market: {market_name}, odds count: {len(market.get('odds', []))}")
@@ -1321,6 +1570,49 @@ def fetch_exchange_odds(oddsmatcha_match_id):
                 })
                 #print(f"[DEBUG] Added {outcome_name} on {site_name} @ {lay_odds}")
         
+        # Post-process: if PREFER_WEBSOCKET_DATA is enabled, replace non-ws versions with ws versions
+        if PREFER_WEBSOCKET_DATA:
+            for market_name in result:
+                for outcome_name in result[market_name]:
+                    odds_list = result[market_name][outcome_name]
+                    
+                    # Group odds by base site name (without _ws suffix)
+                    site_groups = {}
+                    for odd_entry in odds_list:
+                        site = odd_entry['site_name']
+                        if not site:
+                            continue
+                        
+                        # Determine base site name and whether it's websocket
+                        base_site = site.lower().replace('_ws', '')
+                        is_ws = site.lower().endswith('_ws')
+                        
+                        if base_site not in site_groups:
+                            site_groups[base_site] = {'ws': None, 'regular': None}
+                        
+                        if is_ws:
+                            site_groups[base_site]['ws'] = odd_entry
+                        else:
+                            site_groups[base_site]['regular'] = odd_entry
+                    
+                    # Build new list preferring ws versions
+                    new_odds_list = []
+                    for base_site, versions in site_groups.items():
+                        if versions['ws']:
+                            # Use ws version but rename to base site name (strip _ws)
+                            ws_entry = versions['ws'].copy()
+                            ws_entry['site_name'] = base_site.capitalize()
+                            ws_entry['is_websocket'] = True
+                            new_odds_list.append(ws_entry)
+                            #print(f"[DEBUG] Preferred {base_site}_ws over {base_site} for {outcome_name}")
+                        elif versions['regular']:
+                            # No ws version available, use regular
+                            reg_entry = versions['regular'].copy()
+                            reg_entry['is_websocket'] = False
+                            new_odds_list.append(reg_entry)
+                    
+                    result[market_name][outcome_name] = new_odds_list
+        
         #print(f"[DEBUG] Final result: {len(result)} markets, total players: {sum(len(players) for players in result.values())}")
         return result
         
@@ -1334,7 +1626,7 @@ def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type):
     Args:
         betfair_odds: List of odds dicts from Betfair with 'outcome', 'odds', 'size'
         exchange_odds: Dict from fetch_exchange_odds with player names as keys
-        market_type: 'Anytime Goalscorer' or 'First Goalscorer'
+        market_type: 'Anytime Goalscorer', 'First Goalscorer', 'Two or More Goals', or 'Hat-trick'
     
     Returns:
         List of combined odds entries, each with:
@@ -1350,20 +1642,26 @@ def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type):
     
     # Add Betfair odds
     for odd in betfair_odds:
+        player_name = odd.get('outcome', '')
+        if player_name:
+            track_player_name(player_name, 'betfair')
         combined.append({
-            'player_name': odd.get('outcome', ''),
+            'player_name': player_name,
             'site': 'Betfair',
             'lay_odds': float(odd.get('odds', 0)),
             'lay_size': float(odd.get('size', 0)),
             'has_size': True
             ,
-            'norm_name': normalize_name(odd.get('outcome', '') )
+            'norm_name': normalize_name(player_name)
         })
     
     # Add exchange odds
     exchange_market = exchange_odds.get(market_type, {})
     for player_name, site_odds_list in exchange_market.items():
         for site_odd in site_odds_list:
+            site_name = site_odd.get('site_name', '').lower()
+            if player_name and site_name:
+                track_player_name(player_name, site_name)
             combined.append({
                 'player_name': player_name,
                 'site': site_odd.get('site_name'),
@@ -1541,7 +1839,9 @@ def main():
                                         for market_type, players_dict in exchange_odds.items():
                                             for player_name, odds_list in players_dict.items():
                                                 for odd in odds_list:
-                                                    site_name = odd.get('site_name', 'Unknown')
+                                                    site_name = odd.get('site_name', 'Unknown').lower()
+                                                    if player_name and site_name != 'unknown':
+                                                        track_player_name(player_name, site_name)
                                                     lay_odds = odd.get('lay_odds', 'N/A')
                                                     liquidity = odd.get('liquidity', 'None')
                                                     liquidity_str = f"£{int(liquidity)}" if liquidity else "None"
@@ -1634,6 +1934,11 @@ def main():
                                     
                                     # Process each player (only once, with all their exchange odds)
                                     for pname, player_exchanges in player_odds_map.items():
+                                        # Track this player for all exchange sites they appear on
+                                        for exch in player_exchanges:
+                                            site = exch.get('site', '').lower()
+                                            if site and pname:
+                                                track_player_name(pname, site)
                                         total_players_processed += 1
                                         
                                         # Find the best (lowest) lay odds and largest size for threshold checks
@@ -1995,7 +2300,214 @@ def main():
                                                                 footer_text = f"{pname} AGS + Over 0.5 Goals"
                                                             send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_LADBROKES_CHANNEL_ID, footer=footer_text)
                                                             save_state(f"{pname}_{label}", ladbrokes_match_id, LADBROKES_STATE_FILE)
-
+                            
+                            # Process TOM (Two or More Goals) market from exchanges only
+                            if wh_client and exchange_odds.get('Two or More Goals'):
+                                print(f"    [TOM] Processing Two or More Goals market from exchanges")
+                                tom_market = exchange_odds.get('Two or More Goals', {})
+                                
+                                for player_name, odds_list in tom_market.items():
+                                    # Track player name from exchange
+                                    for odd in odds_list:
+                                        site = odd.get('site_name', '').lower()
+                                        if site:
+                                            track_player_name(player_name, site)
+                                    total_players_processed += 1
+                                    
+                                    # Find best (lowest) lay odds
+                                    best_odd = min(odds_list, key=lambda x: x.get('lay_odds', float('inf')))
+                                    lay_price = best_odd.get('lay_odds')
+                                    lay_size = best_odd.get('liquidity')
+                                    has_size = lay_size is not None
+                                    
+                                    # Skip if below threshold
+                                    if has_size and lay_size < GBP_WH_THRESHOLD:
+                                        continue
+                                    
+                                    # Build lay prices text
+                                    lay_prices = []
+                                    for odd in odds_list:
+                                        site = odd.get('site_name', 'Unknown')
+                                        price = odd.get('lay_odds')
+                                        liq = odd.get('liquidity')
+                                        if liq:
+                                            lay_prices.append(f"{site} @ {price} (£{int(liq)})")
+                                        else:
+                                            lay_prices.append(f"{site} @ {price}")
+                                    lay_prices_text = " | ".join(lay_prices)
+                                    
+                                    label = "TOM"
+                                    if already_alerted(player_name, wh_match_id, WH_STATE_FILE, market=label):
+                                        continue
+                                    
+                                    # Check if player is confirmed starter
+                                    if not confirmed_starters or not is_confirmed_starter(player_name, confirmed_starters):
+                                        continue
+                                    
+                                    try:
+                                        combos = wh_client.get_player_combinations(
+                                            player_name=player_name,
+                                            template_name="Two or More",
+                                            get_price=False
+                                        )
+                                        
+                                        if not combos or not combos[0].get('success'):
+                                            continue
+                                        
+                                        combo = combos[0]
+                                        
+                                        # Check pricing mode
+                                        should_fetch_price = False
+                                        force_refresh = False
+                                        
+                                        if WH_PRICING_MODE == 1:
+                                            base_changed = (player_name, label) in changed_base_markets
+                                            has_cache = wh_client.generator.has_cached_price(combo)
+                                            
+                                            if base_changed:
+                                                should_fetch_price = True
+                                                force_refresh = True
+                                            elif not has_cache:
+                                                should_fetch_price = True
+                                                force_refresh = False
+                                            else:
+                                                continue
+                                        else:
+                                            should_fetch_price = True
+                                            force_refresh = False
+                                        
+                                        if not should_fetch_price:
+                                            continue
+                                        
+                                        price_data = wh_client.get_combination_price(combo, use_cache=(not force_refresh))
+                                        
+                                        if price_data and price_data.get('success'):
+                                            wh_odds = price_data.get('odds', 0)
+                                            boosted_odds = wh_odds
+                                            
+                                            if float(wh_odds) >= 4:
+                                                boosted_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
+                                            
+                                            if boosted_odds >= lay_price:
+                                                rating = round(boosted_odds / lay_price * 100, 2)
+                                                title = f"{player_name} - TOM - {boosted_odds}/{lay_price} ({rating}%)"
+                                                desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}"
+                                                fields = [("Confirmed Starter", "✅")]
+                                                footer_text = f"{player_name} Over 0.5 Goals + AGS + Two or More"
+                                                
+                                                if DISCORD_WH_CHANNEL_ID:
+                                                    send_discord_embed(title, desc, fields, colour=0x00143C, 
+                                                                     channel_id=DISCORD_WH_CHANNEL_ID, footer=footer_text)
+                                                    save_state(f"{player_name}_{label}", wh_match_id, WH_STATE_FILE)
+                                                    print(f"[WH TOM ALERT] {player_name} @ {boosted_odds} vs {lay_price} (rating: {rating}%)")
+                                    
+                                    except Exception as e:
+                                        print(f"[TOM] Error processing {player_name}: {e}")
+                                        continue
+                            
+                            # Process HAT (Hat-trick) market from exchanges only
+                            if wh_client and exchange_odds.get('Hat-trick'):
+                                print(f"    [HAT] Processing Hat-trick market from exchanges")
+                                hat_market = exchange_odds.get('Hat-trick', {})
+                                
+                                for player_name, odds_list in hat_market.items():
+                                    # Track player name from exchange
+                                    for odd in odds_list:
+                                        site = odd.get('site_name', '').lower()
+                                        if site:
+                                            track_player_name(player_name, site)
+                                    total_players_processed += 1
+                                    
+                                    # Find best (lowest) lay odds
+                                    best_odd = min(odds_list, key=lambda x: x.get('lay_odds', float('inf')))
+                                    lay_price = best_odd.get('lay_odds')
+                                    lay_size = best_odd.get('liquidity')
+                                    has_size = lay_size is not None
+                                    
+                                    # Skip if below threshold
+                                    if has_size and lay_size < GBP_WH_THRESHOLD:
+                                        continue
+                                    
+                                    # Build lay prices text
+                                    lay_prices = []
+                                    for odd in odds_list:
+                                        site = odd.get('site_name', 'Unknown')
+                                        price = odd.get('lay_odds')
+                                        liq = odd.get('liquidity')
+                                        if liq:
+                                            lay_prices.append(f"{site} @ {price} (£{int(liq)})")
+                                        else:
+                                            lay_prices.append(f"{site} @ {price}")
+                                    lay_prices_text = " | ".join(lay_prices)
+                                    
+                                    label = "HAT"
+                                    if already_alerted(player_name, wh_match_id, WH_STATE_FILE, market=label):
+                                        continue
+                                    
+                                    # Check if player is confirmed starter
+                                    if not confirmed_starters or not is_confirmed_starter(player_name, confirmed_starters):
+                                        continue
+                                    
+                                    try:
+                                        combos = wh_client.get_player_combinations(
+                                            player_name=player_name,
+                                            template_name="Hat-trick",
+                                            get_price=False
+                                        )
+                                        
+                                        if not combos or not combos[0].get('success'):
+                                            continue
+                                        
+                                        combo = combos[0]
+                                        
+                                        # Check pricing mode
+                                        should_fetch_price = False
+                                        force_refresh = False
+                                        
+                                        if WH_PRICING_MODE == 1:
+                                            base_changed = (player_name, label) in changed_base_markets
+                                            has_cache = wh_client.generator.has_cached_price(combo)
+                                            
+                                            if base_changed:
+                                                should_fetch_price = True
+                                                force_refresh = True
+                                            elif not has_cache:
+                                                should_fetch_price = True
+                                                force_refresh = False
+                                            else:
+                                                continue
+                                        else:
+                                            should_fetch_price = True
+                                            force_refresh = False
+                                        
+                                        if not should_fetch_price:
+                                            continue
+                                        
+                                        price_data = wh_client.get_combination_price(combo, use_cache=(not force_refresh))
+                                        
+                                        if price_data and price_data.get('success'):
+                                            wh_odds = price_data.get('odds', 0)
+                                            boosted_odds = wh_odds
+                                            
+                                            if float(wh_odds) >= 4:
+                                                boosted_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
+                                            
+                                            if boosted_odds >= lay_price:
+                                                rating = round(boosted_odds / lay_price * 100, 2)
+                                                title = f"{player_name} - HAT - {boosted_odds}/{lay_price} ({rating}%)"
+                                                desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}"
+                                                fields = [("Confirmed Starter", "✅")]
+                                                footer_text = f"{player_name} Over 0.5 Goals + AGS + Hat-trick"
+                                                
+                                                if DISCORD_WH_CHANNEL_ID:
+                                                    send_discord_embed(title, desc, fields, colour=0x00143C, 
+                                                                     channel_id=DISCORD_WH_CHANNEL_ID, footer=footer_text)
+                                                    save_state(f"{player_name}_{label}", wh_match_id, WH_STATE_FILE)
+                                                    print(f"[WH HAT ALERT] {player_name} @ {boosted_odds} vs {lay_price} (rating: {rating}%)")
+                                    
+                                    except Exception as e:
+                                        print(f"[HAT] Error processing {player_name}: {e}")
+                                        continue
 
 
         loop_time = time.time() - loop_start
