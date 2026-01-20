@@ -55,3 +55,6 @@ wh_football_boosts.json
 login_cookies_dump.json
 test_login_cookies.py
 test_required_cookies.py
+kwiff/server/event_mappings.json
+kwiff_event_details_sample.json
+current_event_sample.json

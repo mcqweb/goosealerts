@@ -850,6 +850,30 @@ def consolidate_player_tracking():
         traceback.print_exc()
         return {'merged_count': 0, 'total_entries': 0}
 
+def transform_to_wh_format(name):
+    """Transform a name from 'First Last' format to WH 'Last, First' format.
+    
+    Args:
+        name: Player name in 'First Last' format
+        
+    Returns:
+        Name in 'Last, First' format, or original if can't transform
+    """
+    if not name or ',' in name:
+        # Already in Last, First format or invalid
+        return name
+    
+    parts = name.strip().split()
+    if len(parts) < 2:
+        # Single name, can't reverse
+        return name
+    
+    # Take last part as surname, rest as first name(s)
+    surname = parts[-1]
+    first_names = ' '.join(parts[:-1])
+    
+    return f"{surname}, {first_names}"
+
 def match_player_name_with_mapping(target_name, target_site, candidates, source_site, mappings=None):
     """Match a target player name against candidates, using mappings first then fuzzy matching.
     
@@ -885,6 +909,18 @@ def match_player_name_with_mapping(target_name, target_site, candidates, source_
             
             if normalize_name(cand_name) == target_norm:
                 return candidate
+    
+    # For WH, try reversing name format (First Last -> Last, First)
+    if source_site == 'williamhill' and not mapped_name:
+        wh_format = transform_to_wh_format(target_name)
+        if wh_format != target_name:
+            target_norm = normalize_name(wh_format)
+            for candidate in candidates:
+                cand_name = candidate if isinstance(candidate, str) else candidate.get('name', '')
+                track_player_name(cand_name, source_site)
+                
+                if normalize_name(cand_name) == target_norm:
+                    return candidate
     
     # Also check if any candidate has a mapping that matches our target
     for candidate in candidates:
@@ -1863,13 +1899,14 @@ def main():
     clear_cache()
     active_comps = betfair.get_active_whitelisted_competitions()   
 
-        # Initialize Kwiff integration
+        # Initialize Kwiff integration (fetch events and map, but don't fetch all match details yet)
     if ENABLE_KWIFF:
         print("\n[INIT] Initializing Kwiff integration...")
         try:
-            kwiff_result = initialize_kwiff_sync(country=KWIFF_COUNTRY, dry_run=False)
+            kwiff_result = initialize_kwiff_sync(country=KWIFF_COUNTRY, dry_run=False, fetch_match_details=False)
             if kwiff_result['overall_success']:
-                print(f"[INIT] ✅ Kwiff ready - {len(get_kwiff_event_mappings())} events mapped")
+                event_count = len(get_kwiff_event_mappings())
+                print(f"[INIT] ✅ Kwiff ready - {event_count} events mapped")
             else:
                 print("[INIT] ⚠️ Kwiff initialization had issues")
         except Exception as e:
@@ -1907,6 +1944,39 @@ def main():
         
         total_matches_checked = 0
         total_players_processed = 0
+        
+        # Collect all active Betfair match IDs for Kwiff match details fetching
+        active_betfair_ids = []
+        for comp in active_comps:
+            try:
+                matches = betfair.fetch_matches_for_competition(comp.get('comp_id', 0))
+                if matches:
+                    for m in matches:
+                        kickoff = m.get('openDate')
+                        if kickoff:
+                            kt = datetime.fromisoformat(kickoff.replace('Z', '+00:00'))
+                            now_utc = datetime.now(timezone.utc)
+                            minutes_until = (kt - now_utc).total_seconds() / 60.0
+                            if 0 <= minutes_until <= WINDOW_MINUTES:
+                                active_betfair_ids.append(str(m.get('id')))
+            except Exception:
+                pass
+        
+        # Fetch Kwiff match details only for active matches (cache will prevent re-fetching)
+        if ENABLE_KWIFF and active_betfair_ids:
+            print(f"\n[KWIFF] Fetching match details for {len(active_betfair_ids)} active matches...")
+            try:
+                from kwiff import fetch_match_details_sync
+                details_result = fetch_match_details_sync(
+                    betfair_market_ids=active_betfair_ids,
+                    max_matches=None  # No limit, but cache will prevent duplicates
+                )
+                if details_result.get('cached_count', 0) > 0:
+                    print(f"[KWIFF] ✅ Cached {details_result['cached_count']} new match details")
+                if details_result.get('skipped_count', 0) > 0:
+                    print(f"[KWIFF] ℹ️ {details_result['skipped_count']} already cached")
+            except Exception as e:
+                print(f"[KWIFF] ⚠️ Failed to fetch match details: {e}")
         
         for comp in active_comps:
             cid = comp.get('comp_id',0)

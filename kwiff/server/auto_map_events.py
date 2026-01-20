@@ -273,7 +273,14 @@ def auto_map_events(dry_run=False):
     no_match_count = 0
     
     for local_event in local_events:
-        local_id = str(local_event.get('eventId'))
+        # Try 'id' first, fallback to 'eventId'
+        local_id = local_event.get('id') or local_event.get('eventId')
+        if local_id is not None:
+            local_id = str(local_id)
+        
+        # Skip invalid event IDs
+        if not local_id or local_id == 'None' or local_id == 'null':
+            continue
         
         # Skip only if already mapped with a real betfair_id (not TODO)
         if local_id in mappings['events']:
@@ -355,7 +362,14 @@ def auto_map_events(dry_run=False):
         print(f"\n[!] UNMAPPED EVENTS (create placeholders):")
         unmapped = []
         for local_event in local_events:
-            local_id = str(local_event.get('eventId'))
+            # Try 'id' first, fallback to 'eventId'
+            local_id = local_event.get('id') or local_event.get('eventId')
+            if local_id is not None:
+                local_id = str(local_id)
+            
+            if not local_id or local_id == 'None' or local_id == 'null':
+                continue
+            
             if local_id not in mappings['events']:
                 local_home = local_event.get('homeTeam')
                 if isinstance(local_home, dict):

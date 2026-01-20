@@ -195,6 +195,29 @@ class KwiffClient:
         
         return response
     
+    async def get_event_details(self, event_id: int) -> Optional[Dict]:
+        """
+        Fetch detailed data for a specific event.
+        
+        This includes markets, players, odds, and bet builder info.
+        
+        Args:
+            event_id: Kwiff event ID
+            
+        Returns:
+            Detailed event data or None if request failed
+        """
+        payload = {
+            "eventId": event_id
+        }
+        
+        response = await self.send_command("event:get", payload)
+        
+        if response and isinstance(response, list) and len(response) > 0:
+            return response[0]  # First item contains the data
+        
+        return response
+    
     async def __aenter__(self):
         """Async context manager entry."""
         if await self.connect():
