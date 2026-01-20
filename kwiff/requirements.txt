@@ -1,0 +1,5 @@
+# Core dependencies for Kwiff WebSocket client
+websockets>=11.0  # Async WebSocket client library (required)
+
+# Optional: for alternative implementationspython-socketio[client]==5.11.1
+websocket-client==1.8.0

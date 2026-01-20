@@ -21,6 +21,7 @@ try:
     from ladbrokes_alerts.client import LadbrokesAlerts
 except Exception:
     LadbrokesAlerts = None
+from kwiff import initialize_kwiff_sync, get_kwiff_event_mappings
 
 
 # ========= INITIALIZATION =========
@@ -460,6 +461,8 @@ PREFER_WEBSOCKET_DATA = os.getenv("PREFER_WEBSOCKET_DATA", "1").lower() in ("1",
 # Mode 1 (default): Only fetch combo price if no cache exists OR base odds changed
 # Mode 2: Always refresh with 5-minute timeout (existing behavior)
 WH_PRICING_MODE = int(os.getenv("WH_PRICING_MODE", "1"))  # 1 or 2
+ENABLE_KWIFF = os.getenv("ENABLE_KWIFF", "1") == "1"
+KWIFF_COUNTRY = os.getenv("KWIFF_COUNTRY", "GB")
 
 # ========= DISCORD =========
 def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=None, footer=None,icon=None, bot_token=None):
@@ -1859,6 +1862,20 @@ def main():
     betfair = Betfair()
     clear_cache()
     active_comps = betfair.get_active_whitelisted_competitions()   
+
+        # Initialize Kwiff integration
+    if ENABLE_KWIFF:
+        print("\n[INIT] Initializing Kwiff integration...")
+        try:
+            kwiff_result = initialize_kwiff_sync(country=KWIFF_COUNTRY, dry_run=False)
+            if kwiff_result['overall_success']:
+                print(f"[INIT] ✅ Kwiff ready - {len(get_kwiff_event_mappings())} events mapped")
+            else:
+                print("[INIT] ⚠️ Kwiff initialization had issues")
+        except Exception as e:
+            print(f"[INIT] ⚠️ Kwiff initialization failed: {e}")
+    else:
+        print("[INIT] Kwiff integration disabled")
     # Record the start date (London timezone). If the date changes during a run
     # we exit so a daily cron can restart a fresh process.
     run_start_date = datetime.now(london).date()
