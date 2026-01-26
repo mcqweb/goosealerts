@@ -2498,42 +2498,50 @@ def main():
                                                 else:
                                                     continue
                                                 #print(f"  [LADBROKES] {pname} - AGS(combo): {lb.get('ags_combo')} | FGS+AGS(combo): {lb.get('fgs_combo')}")
-                                                
                                                 betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
                                                 if already_alerted(pname, ladbrokes_match_id, LADBROKES_STATE_FILE, market=label):
                                                     continue
+                                                # Check if match is in offer id 7 (refund offer)
+                                                is_refund_offer = False
+                                                try:
+                                                    from willhill_betbuilder import is_match_in_offer
+                                                    is_refund_offer = is_match_in_offer(ladbrokes_match_id, offer_id=7)
+                                                except Exception:
+                                                    pass
                                                 if DISCORD_LADBROKES_CHANNEL_ID:
-                                                    #print(betfair_lay_bet)
                                                     print(f"Comparison: {pname} {label} - Ladbrokes Odds: {odds} vs Lay Odds: {price}")
-                                                    # Handle None/non-numeric odds safely
                                                     try:
                                                         valid_odds = isinstance(odds, (int, float))
                                                         valid_price = isinstance(price, (int, float)) and price > 0
                                                     except Exception:
                                                         valid_odds = valid_price = False
-                                                    if valid_odds and valid_price and odds >= price:
-                                                        # ensure lineup confirmation before sending Ladbrokes alert
+                                                    send_alert = False
+                                                    extra_note = ""
+                                                    if valid_odds and valid_price:
+                                                        if is_refund_offer:
+                                                            match_pct = round(odds / price * 100, 2) if price > 0 else 0
+                                                            if match_pct >= 80:
+                                                                send_alert = True
+                                                                extra_note = "\n\n**Ladbrokes Refund Offer active (Bet Builder, Offer ID 7): Alert requires 80%+ match**"
+                                                            else:
+                                                                print(f"[LADBROKES] Refund offer active, but odds only {match_pct}% of lay price (requires 80%+)")
+                                                        else:
+                                                            if odds >= price:
+                                                                send_alert = True
+                                                    if send_alert:
                                                         if not confirmed_starters:
                                                             print(f"[LAD] Skipping alert for {pname} - no lineup data available")
                                                         elif not is_confirmed_starter(pname, confirmed_starters):
                                                             print(f"[LAD] Skipping alert for {pname} - not in confirmed starters")
                                                         else:
-                                                            # compute rating defensively
                                                             try:
                                                                 rating = round(odds / price * 100, 2)
                                                             except Exception:
                                                                 rating = 0
                                                             title = f"[LAD] {pname} - {label} - {odds}/{price} ({rating}%)"
-
-                                                            # Build description with optional Confirmed Starter
                                                             starter_line = "\nConfirmed Starter ✅"
-
-                                                            desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
-                                                            fields = []
-
-                                                            # Add confirmed starter field
-                                                            fields.append(("Confirmed Starter", "✅"))
-                                                            #build footer
+                                                            desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid}){extra_note}"
+                                                            fields = [("Confirmed Starter", "✅")]
                                                             if label == "FGS":
                                                                 footer_text = f"{pname} FGS + AGS"
                                                             elif label == "AGS":
