@@ -2514,8 +2514,8 @@ def main():
                                                         data = resp.json()
                                                         matches = data.get('matches', [])
                                                         for match in matches:
-                                                            mappings = match.get('mappings', [])
-                                                            for mapping in mappings:
+                                                            match_mappings = match.get('mappings', [])
+                                                            for mapping in match_mappings:
                                                                 if (mapping.get('site_name') == 'ladbrokes' and 
                                                                     mapping.get('site_match_id') == ladbrokes_match_id):
                                                                     is_refund_offer = True
