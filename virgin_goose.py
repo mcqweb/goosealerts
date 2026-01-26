@@ -2041,6 +2041,8 @@ def main():
                             if ENABLE_LADBROKES:
                                 target_sites.append('ladbrokes')
                             mappings, oddsmatcha_match_id = map_betfair_to_sites(mid, target_sites)
+                            # Ensure mappings is always a dict
+                            mappings = dict(mappings or {})
                             # Hardcoded Ladbrokes mappings: oddsmatcha_id -> ladbrokes_id
                             try:
                                 ladb_map = {
@@ -2062,7 +2064,6 @@ def main():
                                 except Exception:
                                     key = None
                                 if key in ladb_map:
-                                    mappings = dict(mappings or {})
                                     mappings['ladbrokes'] = ladb_map[key]
                                     print(f"[LADBROKES] Applied hardcoded mapping for oddsmatcha {key} -> {ladb_map[key]}")
                             except Exception:
