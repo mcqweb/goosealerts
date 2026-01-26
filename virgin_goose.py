@@ -1939,8 +1939,27 @@ def main():
         # If the local date (Europe/London) has changed since the process started,
         # exit so the cron job can restart a fresh run for the new day.
         if datetime.now(london).date() != run_start_date:
-            print(f"Local date changed from {run_start_date} to {datetime.now(london).date()}; exiting for daily restart")
-            return
+            print(f"Local date changed from {run_start_date} to {datetime.now(london).date()}; reinitializing for new day")
+            # Reinitialize everything for the new day
+            run_start_date = datetime.now(london).date()
+            run_number = 0
+            clear_cache()
+            betfair = Betfair()
+            active_comps = betfair.get_active_whitelisted_competitions()
+            if ENABLE_KWIFF:
+                print("\n[INIT] Reinitializing Kwiff integration...")
+                try:
+                    kwiff_result = initialize_kwiff_sync(country=KWIFF_COUNTRY, dry_run=False, fetch_match_details=False)
+                    if kwiff_result['overall_success']:
+                        event_count = len(get_kwiff_event_mappings())
+                        print(f"[INIT] ✅ Kwiff ready - {event_count} events mapped")
+                    else:
+                        print("[INIT] ⚠️ Kwiff initialization had issues")
+                except Exception as e:
+                    print(f"[INIT] ⚠️ Kwiff initialization failed: {e}")
+            else:
+                print("[INIT] Kwiff integration disabled")
+            continue
         
         total_matches_checked = 0
         total_players_processed = 0
