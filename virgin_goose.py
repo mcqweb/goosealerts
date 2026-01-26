@@ -441,6 +441,7 @@ GBP_THRESHOLD_GOOSE  = float(os.getenv("GBP_THRESHOLD_GOOSE", "10"))
 GBP_ARB_THRESHOLD = float(os.getenv("GBP_ARB_THRESHOLD", "10"))
 GBP_WH_THRESHOLD = float(os.getenv("GBP_WH_THRESHOLD", "10"))
 GBP_LADBROKES_THRESHOLD = float(os.getenv("GBP_LADBROKES_THRESHOLD", "10"))
+LADBROKES_OFFER7_THRESHOLD = float(os.getenv("LADBROKES_OFFER7_THRESHOLD", "80"))  # Threshold % for Ladbrokes offer 7 (refund)
 GOOSE_MIN_ODDS      = float(os.getenv("GOOSE_MIN_ODDS", "1.2"))  # min odds for goose combos
 WINDOW_MINUTES   = int(os.getenv("WINDOW_MINUTES", "90"))    # KO window
 POLL_SECONDS      = int(os.getenv("POLL_SECONDS", "60"))    # How long should each loop wait
@@ -2502,12 +2503,32 @@ def main():
                                                 if already_alerted(pname, ladbrokes_match_id, LADBROKES_STATE_FILE, market=label):
                                                     continue
                                                 # Check if match is in offer id 7 (refund offer)
+                                                # Use the same offer checking function as WH (works for any site)
                                                 is_refund_offer = False
                                                 try:
-                                                    from willhill_betbuilder import is_match_in_offer
-                                                    is_refund_offer = is_match_in_offer(ladbrokes_match_id, offer_id=7)
-                                                except Exception:
-                                                    pass
+                                                    # Check if ladbrokes_match_id is in offer 7
+                                                    api = f"https://api.oddsmatcha.uk/offers/7"
+                                                    resp = requests.get(api, timeout=10)
+                                                    if resp.ok:
+                                                        data = resp.json()
+                                                        matches = data.get('matches', [])
+                                                        for match in matches:
+                                                            mappings = match.get('mappings', [])
+                                                            for mapping in mappings:
+                                                                if (mapping.get('site_name') == 'ladbrokes' and 
+                                                                    mapping.get('site_match_id') == ladbrokes_match_id):
+                                                                    is_refund_offer = True
+                                                                    break
+                                                            if is_refund_offer:
+                                                                break
+                                                    
+                                                    if is_refund_offer:
+                                                        print(f"    [LADBROKES] Match {ladbrokes_match_id} is in Offer ID 7")
+                                                    else:
+                                                        print(f"    [LADBROKES] Match {ladbrokes_match_id} is NOT in Offer ID 7")
+                                                except Exception as e:
+                                                    print(f"    [LADBROKES] Error checking offer ID 7: {e}")
+                                                    traceback.print_exc()
                                                 if DISCORD_LADBROKES_CHANNEL_ID:
                                                     print(f"Comparison: {pname} {label} - Ladbrokes Odds: {odds} vs Lay Odds: {price}")
                                                     try:
@@ -2520,33 +2541,43 @@ def main():
                                                     if valid_odds and valid_price:
                                                         if is_refund_offer:
                                                             match_pct = round(odds / price * 100, 2) if price > 0 else 0
-                                                            if match_pct >= 80:
+                                                            if match_pct >= LADBROKES_OFFER7_THRESHOLD:
                                                                 send_alert = True
-                                                                extra_note = "\n\n**Ladbrokes Refund Offer active (Bet Builder, Offer ID 7): Alert requires 80%+ match**"
+                                                                extra_note = f"\n\n**Ladbrokes Refund Offer active (Bet Builder B10G10)**"
                                                             else:
-                                                                print(f"[LADBROKES] Refund offer active, but odds only {match_pct}% of lay price (requires 80%+)")
+                                                                print(f"[LADBROKES] Refund offer active, but odds only {match_pct}% of lay price (requires {LADBROKES_OFFER7_THRESHOLD}%+)")
                                                         else:
                                                             if odds >= price:
                                                                 send_alert = True
                                                     if send_alert:
                                                         if not confirmed_starters:
-                                                            print(f"[LAD] Skipping alert for {pname} - no lineup data available")
+                                                            print(f"[LAD] Would send alert for {pname} ({label}) - but no lineup data available. (Ladbrokes Odds: {odds} vs Lay Odds: {price})")
                                                         elif not is_confirmed_starter(pname, confirmed_starters):
-                                                            print(f"[LAD] Skipping alert for {pname} - not in confirmed starters")
+                                                            print(f"[LAD] Would send alert for {pname} ({label}) - but not in confirmed starters. (Ladbrokes Odds: {odds} vs Lay Odds: {price})")
                                                         else:
                                                             try:
                                                                 rating = round(odds / price * 100, 2)
                                                             except Exception:
                                                                 rating = 0
-                                                            title = f"[LAD] {pname} - {label} - {odds}/{price} ({rating}%)"
-                                                            starter_line = "\nConfirmed Starter ✅"
-                                                            desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid}){extra_note}"
+                                                            
+                                                            # Determine prefix and color based on rating
+                                                            if rating >= 100:
+                                                                # True arb - Ladbrokes red
+                                                                prefix = "[LAD]"
+                                                                colour = 0xFF0000  # Red
+                                                            else:
+                                                                # Between threshold and 100% - Coral blue
+                                                                prefix = "[CORAL]"
+                                                                colour = 0x1E90FF  # Coral/Dodger Blue
+                                                            
+                                                            title = f"{prefix} {pname} - {label} - {odds}/{price} ({rating}%)"
+                                                            desc = f"**{mname}** ({ko_str})\n{cname}\nConfirmed Starter ✅\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid}){extra_note}"
                                                             fields = [("Confirmed Starter", "✅")]
                                                             if label == "FGS":
                                                                 footer_text = f"{pname} FGS + AGS"
                                                             elif label == "AGS":
                                                                 footer_text = f"{pname} AGS + Over 0.5 Goals"
-                                                            send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_LADBROKES_CHANNEL_ID, footer=footer_text)
+                                                            send_discord_embed(title, desc, fields, colour=colour, channel_id=DISCORD_LADBROKES_CHANNEL_ID, footer=footer_text)
                                                             save_state(f"{pname}_{label}", ladbrokes_match_id, LADBROKES_STATE_FILE)
                             
                             # Process TOM (Two or More Goals) market from exchanges only
