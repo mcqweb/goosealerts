@@ -2566,12 +2566,8 @@ def main():
                                                         rating = round(back_odds / price * 100, 2)
                                                         title = f"{pname} - {back_odds}/{price} ({rating}%)"
                                                         
-                                                        # Build description with optional Confirmed Starter
-                                                        starter_line = ""
-                                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
-                                                            starter_line = "\nConfirmed Starter ✅"
-                                                        
-                                                        desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
+                                                        # Build description without Confirmed Starter (it's in fields)
+                                                        desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
                                                         #There is an arb here
 
                                                         '''
@@ -2626,12 +2622,8 @@ def main():
                                             ("BFEX Link", f"[Open Market](https://www.betfair.com/exchange/plus/football/market/{midid})"),
                                         ]
                                         
-                                        # Build description with optional Confirmed Starter
-                                        starter_line = ""
-                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
-                                            starter_line = "\nConfirmed Starter ✅"
-                                        
-                                        desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}"
+                                        # Build description without Confirmed Starter (it's in fields)
+                                        desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}"
                                                 
                                         # Add confirmed starter field if applicable
                                         if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
@@ -2783,7 +2775,7 @@ def main():
                                                             
                                                             rating_sm = round(boosted_odds / smarkets_price * 100, 2)
                                                             title_sm = f"{pname} - {label} - {boosted_odds}/{smarkets_price} ({rating_sm}%)"
-                                                            desc_sm = f"**{mname}** ({ko_str})\n{cname}\nConfirmed Starter ✅\n\n**Lay Price:** {smarkets_lay_text}"
+                                                            desc_sm = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Price:** {smarkets_lay_text}"
                                                             
                                                             fields_sm = [("Confirmed Starter", "✅")]
                                                             
@@ -2906,7 +2898,7 @@ def main():
                                             extra_note = f"\n\n**Ladbrokes Refund Offer active (Bet Builder B10G10)**"
                                         
                                         title = f"{pname} - {label} - {odds}/{price} ({rating}%)"
-                                        desc = f"**{mname}** ({ko_str})\n{cname}\nConfirmed Starter ✅\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid}){extra_note}"
+                                        desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid}){extra_note}"
                                         fields = [("Confirmed Starter", "✅")]
                                         if label == "FGS":
                                             footer_text = f"{pname} FGS + AGS"
