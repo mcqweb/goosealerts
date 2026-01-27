@@ -438,6 +438,81 @@ GOOSE_FOOTER_ICON_URL = "https://img.icons8.com/?size=100&id=CXvbGFYLkaMY&format
 PLAYER_MAPPINGS_FILE = "player_name_mappings.json"
 PLAYER_TRACKING_FILE = "data/player_name_tracking.json"
 
+# Alert configuration file
+ALERT_CONFIG_FILE = os.path.join(BASE_DIR, "alert_config.live.json")
+
+# ========= ALERT CONFIG LOADER =========
+def load_alert_config():
+    """Load alert configuration from JSON file.
+    
+    Returns:
+        Dict with alert type as keys, each containing list of destination configs
+    """
+    try:
+        if not os.path.exists(ALERT_CONFIG_FILE):
+            print(f"[WARN] Alert config file not found: {ALERT_CONFIG_FILE}")
+            print("[WARN] Using legacy environment variable configuration")
+            return None
+        
+        with open(ALERT_CONFIG_FILE, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        # Filter out comment keys
+        config = {k: v for k, v in config.items() if not k.startswith('_')}
+        
+        # Validate and process each alert type
+        for alert_type, destinations in config.items():
+            if not isinstance(destinations, list):
+                print(f"[WARN] Config for '{alert_type}' must be a list")
+                continue
+            
+            for dest in destinations:
+                # Validate required fields
+                if 'channel_id' not in dest or 'bot_token_env' not in dest:
+                    print(f"[WARN] Destination in '{alert_type}' missing required fields: {dest}")
+                    continue
+                
+                # Convert color string to int if present
+                if 'color' in dest and isinstance(dest['color'], str):
+                    try:
+                        dest['color'] = int(dest['color'], 16)
+                    except Exception:
+                        print(f"[WARN] Invalid color format in '{alert_type}': {dest['color']}")
+                        dest['color'] = 0x3AA3E3  # Default color
+        
+        print(f"[CONFIG] Loaded alert configuration from {ALERT_CONFIG_FILE}")
+        return config
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to load alert config: {e}")
+        traceback.print_exc()
+        return None
+
+def get_min_threshold(alert_type, config):
+    """Get the minimum threshold for an alert type to use for initial filtering.
+    
+    Args:
+        alert_type: Alert type key (e.g., 'ladbrokes', 'williamhill')
+        config: Loaded alert configuration
+    
+    Returns:
+        Minimum threshold across all enabled destinations, or 100 as default
+    """
+    if not config or alert_type not in config:
+        return 100
+    
+    min_thresh = 100
+    for dest in config[alert_type]:
+        if dest.get('enabled', True):
+            thresh = dest.get('threshold', 100)
+            if thresh < min_thresh:
+                min_thresh = thresh
+    
+    return min_thresh
+
+# Load alert configuration at startup
+ALERT_CONFIG = load_alert_config()
+
 # ========= CONFIG =========
 GBP_THRESHOLD_GOOSE  = float(os.getenv("GBP_THRESHOLD_GOOSE", "10"))
 GBP_ARB_THRESHOLD = float(os.getenv("GBP_ARB_THRESHOLD", "10"))
@@ -521,6 +596,101 @@ def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=N
             print(f"[WARN] Channel {channel_id} error body: {r.text[:600]}")
     except Exception as e:
         print(f"[WARN] Channel {channel_id} post failed: {e}")
+
+def send_alert_to_destinations(alert_type, title, description, fields, footer=None, icon=None, rating=None, 
+                               offer_id=None, is_smarkets_only=False, config=None):
+    """Send an alert to multiple configured destinations based on their criteria.
+    
+    Args:
+        alert_type: Type of alert (e.g., 'ladbrokes', 'williamhill', 'goose')
+        title: Alert title
+        description: Alert description
+        fields: Alert fields list
+        footer: Optional footer text
+        icon: Optional footer icon URL
+        rating: Optional rating percentage for threshold filtering
+        offer_id: Optional offer ID for special offer handling
+        is_smarkets_only: Whether this is a Smarkets-only alert
+        config: Alert configuration (uses global ALERT_CONFIG if not provided)
+    
+    Returns:
+        Number of destinations the alert was sent to
+    """
+    if config is None:
+        config = ALERT_CONFIG
+    
+    if not config or alert_type not in config:
+        # Fall back to legacy environment variable logic
+        return 0
+    
+    sent_count = 0
+    destinations = config[alert_type]
+    
+    for dest in destinations:
+        # Check if destination is enabled
+        if not dest.get('enabled', True):
+            continue
+        
+        # Skip Smarkets-only destinations if this isn't a Smarkets alert
+        if dest.get('smarkets_only', False) and not is_smarkets_only:
+            continue
+        
+        # Skip non-Smarkets destinations if this is a Smarkets-only alert
+        if is_smarkets_only and not dest.get('smarkets_only', False):
+            continue
+        
+        # Check rating threshold if provided
+        if rating is not None:
+            threshold = dest.get('threshold', 100)
+            if rating < threshold:
+                continue
+        
+        # Check offer ID match if specified in destination config
+        dest_offer_id = dest.get('offer_id')
+        if dest_offer_id is not None and dest_offer_id != offer_id:
+            continue
+        
+        # Get color and prefix (with defaults)
+        colour = dest.get('color', 0x3AA3E3)
+        
+        # Use destination-specific prefix if provided, otherwise use default based on alert type
+        prefix = dest.get('prefix', '')
+        if prefix and not title.startswith('['):
+            title_with_prefix = f"{prefix} {title}"
+        else:
+            title_with_prefix = title
+        
+        # Get bot token from environment
+        bot_token_env = dest.get('bot_token_env', 'DISCORD_BOT_TOKEN')
+        bot_token = os.getenv(bot_token_env, '')
+        
+        if not bot_token:
+            print(f"[WARN] No bot token found for {bot_token_env}")
+            continue
+        
+        channel_id = dest.get('channel_id', '')
+        if not channel_id:
+            print(f"[WARN] No channel_id in destination: {dest.get('name', 'unknown')}")
+            continue
+        
+        # Send the alert
+        try:
+            send_discord_embed(
+                title=title_with_prefix,
+                description=description,
+                fields=fields,
+                colour=colour,
+                channel_id=channel_id,
+                footer=footer,
+                icon=icon,
+                bot_token=bot_token
+            )
+            sent_count += 1
+            print(f"[ALERT] Sent to {dest.get('name', channel_id)} (rating: {rating}%, threshold: {dest.get('threshold', 100)}%)")
+        except Exception as e:
+            print(f"[ERROR] Failed to send alert to {dest.get('name', channel_id)}: {e}")
+    
+    return sent_count
 
 VIRGIN_HEADERS = {
         'Content-Type': 'application/json',
@@ -1524,6 +1694,74 @@ def is_match_in_wh_offer(wh_match_id, offer_id=1):
         print(f"Error checking WH offer: {e}")
         return False
 
+def fetch_matches_from_oddsmatcha(next_days=0):
+    """Fetch matches from OddsMatcha API with all site mappings included.
+    
+    Args:
+        next_days: Number of days from today (0 = today only)
+    
+    Returns:
+        List of match dicts with structure:
+        {
+            'id': int (oddsmatcha match ID),
+            'kick_off': str (ISO timestamp),
+            'home_team': str,
+            'away_team': str,
+            'competition': str,
+            'allowed_markets': str or None,
+            'mappings': {
+                'betfair': str or None,
+                'virginbet': str or None,
+                'williamhill': str or None,
+                'smarkets': str or None,
+                'oddschecker': str or None,
+                'ladbrokes': str or None,
+                # ... other sites
+            }
+        }
+    """
+    try:
+        url = f"https://api.oddsmatcha.uk/matches/?next_days={next_days}"
+        scraper = cloudscraper.create_scraper()
+        resp = scraper.get(url, timeout=30)
+        
+        if resp.status_code != 200:
+            print(f"[ODDSMATCHA] API error: {resp.status_code}")
+            return []
+        
+        matches_data = resp.json()
+        
+        # Transform the response to a more convenient structure
+        processed_matches = []
+        for match in matches_data:
+            # Convert mappings array to dict keyed by site_name
+            mappings_dict = {}
+            for mapping in match.get('mappings', []):
+                site_name = mapping.get('site_name', '')
+                site_match_id = mapping.get('site_match_id', '')
+                if site_name and site_match_id:
+                    mappings_dict[site_name] = site_match_id
+            
+            processed_match = {
+                'id': match.get('id'),
+                'kick_off': match.get('kick_off'),
+                'home_team': match.get('home_team'),
+                'away_team': match.get('away_team'),
+                'competition': match.get('competition'),
+                'allowed_markets': match.get('allowed_markets'),
+                'mappings': mappings_dict,
+                'name': f"{match.get('home_team')} v {match.get('away_team')}"
+            }
+            processed_matches.append(processed_match)
+        
+        print(f"[ODDSMATCHA] Fetched {len(processed_matches)} matches")
+        return processed_matches
+        
+    except Exception as e:
+        print(f"[ODDSMATCHA] Error fetching matches: {e}")
+        traceback.print_exc()
+        return []
+
 def fetch_lineups(oddsmatcha_match_id):
     """Fetch starting lineups from OddsMatcha API.
 
@@ -1898,11 +2136,11 @@ def already_alerted(player_name, match_id, file, market=None):
 
 # ========= MAIN LOOP =========
 def main():
+    # Initialize Betfair for market odds fetching (still needed for player odds)
     betfair = Betfair()
     clear_cache()
-    active_comps = betfair.get_active_whitelisted_competitions()   
 
-        # Initialize Kwiff integration (fetch events and map, but don't fetch all match details yet)
+    # Initialize Kwiff integration (fetch events and map, but don't fetch all match details yet)
     if ENABLE_KWIFF:
         print("\n[INIT] Initializing Kwiff integration...")
         try:
@@ -1916,17 +2154,139 @@ def main():
             print(f"[INIT] ⚠️ Kwiff initialization failed: {e}")
     else:
         print("[INIT] Kwiff integration disabled")
-    # Record the start date (London timezone). If the date changes during a run
-    # we exit so a daily cron can restart a fresh process.
+    
+    # Record the start date (London timezone)
     run_start_date = datetime.now(london).date()
     
     # Load persistent run counter
     run_number = load_run_counter()
     print(f"[INIT] Starting from run #{run_number + 1}")
     
+    # Fetch matches once at startup and store them
+    all_matches_cache = None
+    last_match_fetch = None
+    
     while True:
+        # Check if we need to re-fetch matches (new day or first run)
+        current_date = datetime.now(london).date()
+        if current_date != run_start_date:
+            print(f"\n[DATE CHANGE] Date changed from {run_start_date} to {current_date}")
+            print("[REINIT] Reinitializing for new day...")
+            run_start_date = current_date
+            run_number = 0
+            clear_cache()
+            betfair = Betfair()
+            all_matches_cache = None
+            last_match_fetch = None
+            if ENABLE_KWIFF:
+                print("\n[INIT] Reinitializing Kwiff integration...")
+                try:
+                    kwiff_result = initialize_kwiff_sync(country=KWIFF_COUNTRY, dry_run=False, fetch_match_details=False)
+                    if kwiff_result['overall_success']:
+                        event_count = len(get_kwiff_event_mappings())
+                        print(f"[INIT] ✅ Kwiff ready - {event_count} events mapped")
+                    else:
+                        print("[INIT] ⚠️ Kwiff initialization had issues")
+                except Exception as e:
+                    print(f"[INIT] ⚠️ Kwiff initialization failed: {e}")
+        
+        # Fetch matches once per day (or at startup)
+        if all_matches_cache is None:
+            print("\n[ODDSMATCHA] Fetching today's matches...")
+            all_matches_cache = fetch_matches_from_oddsmatcha(next_days=0)
+            last_match_fetch = datetime.now(timezone.utc)
+            
+            if not all_matches_cache:
+                print("[WARN] No matches returned from OddsMatcha API")
+                print("[WAIT] Retrying in 5 minutes...")
+                time.sleep(300)
+                continue
+            
+            # Parse and display all matches with kickoff times
+            now_utc = datetime.now(timezone.utc)
+            now_london = datetime.now(london)
+            print(f"\n[SCHEDULE] Current time: {now_london.strftime('%Y-%m-%d %H:%M:%S')} (London)")
+            print(f"[SCHEDULE] Found {len(all_matches_cache)} matches today:\n")
+            
+            valid_matches = []
+            for match in all_matches_cache:
+                kickoff_str = match.get('kick_off')
+                if not kickoff_str:
+                    continue
+                
+                try:
+                    kt = datetime.fromisoformat(kickoff_str.replace('Z', '+00:00'))
+                    if kt.tzinfo is None:
+                        kt = kt.replace(tzinfo=timezone.utc)
+                    
+                    # Convert to London time for display
+                    kt_london = kt.astimezone(london)
+                    minutes_until = (kt - now_utc).total_seconds() / 60.0
+                    
+                    match['kickoff_time'] = kt
+                    match['minutes_until'] = minutes_until
+                    valid_matches.append(match)
+                    
+                    # Display match info
+                    status = ""
+                    if minutes_until < 0:
+                        status = f"(started {abs(minutes_until):.0f}m ago)"
+                    elif minutes_until < WINDOW_MINUTES:
+                        status = f"(ACTIVE - {minutes_until:.0f}m away)"
+                    else:
+                        status = f"({minutes_until:.0f}m away)"
+                    
+                    print(f"  {kt_london.strftime('%H:%M')} - {match.get('name')} {status}")
+                    print(f"         {match.get('competition', 'Unknown')}")
+                
+                except Exception as e:
+                    print(f"[WARN] Failed to parse kickoff for match {match.get('id')}: {e}")
+                    continue
+            
+            all_matches_cache = valid_matches
+            
+            if not all_matches_cache:
+                print("\n[WARN] No valid matches found for today")
+                print("[WAIT] Retrying in 5 minutes...")
+                time.sleep(300)
+                continue
+            
+            # Find the earliest match that hasn't started yet
+            upcoming_matches = [m for m in all_matches_cache if m['minutes_until'] > -90]  # Include matches that started recently
+            
+            if not upcoming_matches:
+                print("\n[INFO] All matches have finished or are too far past kickoff")
+                print("[WAIT] Waiting until midnight for tomorrow's matches...")
+                # Sleep until next day
+                tomorrow = datetime.now(london).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                sleep_seconds = (tomorrow - datetime.now(london)).total_seconds()
+                print(f"[WAIT] Sleeping for {sleep_seconds/3600:.1f} hours until {tomorrow.strftime('%Y-%m-%d %H:%M')}")
+                time.sleep(sleep_seconds)
+                all_matches_cache = None
+                continue
+            
+            # Sort by kickoff time and find first match
+            upcoming_matches.sort(key=lambda m: m['kickoff_time'])
+            first_match = upcoming_matches[0]
+            minutes_until_first = first_match['minutes_until']
+            
+            # Calculate when to start monitoring (WINDOW_MINUTES before first match)
+            if minutes_until_first > WINDOW_MINUTES:
+                wait_minutes = minutes_until_first - WINDOW_MINUTES
+                wait_seconds = wait_minutes * 60
+                start_time = datetime.now(london) + timedelta(seconds=wait_seconds)
+                
+                print(f"\n[SCHEDULE] First match: {first_match.get('name')}")
+                print(f"[SCHEDULE] Kickoff: {first_match['kickoff_time'].astimezone(london).strftime('%H:%M')} ({minutes_until_first:.0f}m away)")
+                print(f"[SCHEDULE] Will start monitoring at: {start_time.strftime('%H:%M')} (in {wait_minutes:.0f}m)")
+                print(f"[WAIT] Sleeping until {WINDOW_MINUTES}m before first match...")
+                
+                time.sleep(wait_seconds)
+                print(f"\n[WAKE] Waking up to start monitoring...")
+        
+        # Now start the active monitoring loop
         run_number += 1
-        save_run_counter(run_number)  # Persist immediately
+        save_run_counter(run_number)
         loop_start = time.time()
         print(f"\n{'='*80}")
         print(f"Starting run #{run_number}")
@@ -1939,50 +2299,33 @@ def main():
                 print(f"[CONSOLIDATE] Merged {result['merged_count']} player name entries")
         except Exception as e:
             print(f"[WARN] Failed to consolidate player tracking: {e}")
-        # If the local date (Europe/London) has changed since the process started,
-        # exit so the cron job can restart a fresh run for the new day.
-        if datetime.now(london).date() != run_start_date:
-            print(f"Local date changed from {run_start_date} to {datetime.now(london).date()}; reinitializing for new day")
-            # Reinitialize everything for the new day
-            run_start_date = datetime.now(london).date()
-            run_number = 0
-            clear_cache()
-            betfair = Betfair()
-            active_comps = betfair.get_active_whitelisted_competitions()
-            if ENABLE_KWIFF:
-                print("\n[INIT] Reinitializing Kwiff integration...")
-                try:
-                    kwiff_result = initialize_kwiff_sync(country=KWIFF_COUNTRY, dry_run=False, fetch_match_details=False)
-                    if kwiff_result['overall_success']:
-                        event_count = len(get_kwiff_event_mappings())
-                        print(f"[INIT] ✅ Kwiff ready - {event_count} events mapped")
-                    else:
-                        print("[INIT] ⚠️ Kwiff initialization had issues")
-                except Exception as e:
-                    print(f"[INIT] ⚠️ Kwiff initialization failed: {e}")
-            else:
-                print("[INIT] Kwiff integration disabled")
-            continue
         
         total_matches_checked = 0
         total_players_processed = 0
         
-        # Collect all active Betfair match IDs for Kwiff match details fetching
+        # Filter matches within the kickoff window from cached data
+        now_utc = datetime.now(timezone.utc)
+        active_matches = []
+        
+        for match in all_matches_cache:
+            kt = match.get('kickoff_time')
+            if not kt:
+                continue
+            
+            minutes_until = (kt - now_utc).total_seconds() / 60.0
+            match['minutes_until'] = minutes_until
+            
+            if 0 <= minutes_until <= WINDOW_MINUTES:
+                active_matches.append(match)
+        
+        print(f"[INFO] {len(active_matches)} matches within {WINDOW_MINUTES} minute window")
+        
+        # Collect Betfair IDs for Kwiff match details fetching
         active_betfair_ids = []
-        for comp in active_comps:
-            try:
-                matches = betfair.fetch_matches_for_competition(comp.get('comp_id', 0))
-                if matches:
-                    for m in matches:
-                        kickoff = m.get('openDate')
-                        if kickoff:
-                            kt = datetime.fromisoformat(kickoff.replace('Z', '+00:00'))
-                            now_utc = datetime.now(timezone.utc)
-                            minutes_until = (kt - now_utc).total_seconds() / 60.0
-                            if 0 <= minutes_until <= WINDOW_MINUTES:
-                                active_betfair_ids.append(str(m.get('id')))
-            except Exception:
-                pass
+        for match in active_matches:
+            betfair_id = match.get('mappings', {}).get('betfair')
+            if betfair_id:
+                active_betfair_ids.append(str(betfair_id))
         
         # Fetch Kwiff match details only for active matches (cache will prevent re-fetching)
         if ENABLE_KWIFF and active_betfair_ids:
@@ -2000,224 +2343,201 @@ def main():
             except Exception as e:
                 print(f"[KWIFF] ⚠️ Failed to fetch match details: {e}")
         
-        for comp in active_comps:
-            cid = comp.get('comp_id',0)
-            cname = comp.get('comp_name')
-            comp_start = time.time()
-            try:
-                matches = betfair.fetch_matches_for_competition(cid)
-            except Exception as e:
-                print(f"  Error fetching matches for {cid}: {e}")
-                continue
-            comp_fetch_time = time.time() - comp_start
-            if comp_fetch_time > 2:
-                print(f"[TIMING] Fetching matches for {cname} took {comp_fetch_time:.2f}s")
+        # Process each active match
+        for match in active_matches:
+            total_matches_checked += 1
             
-            if not matches:
-                #No upcoming matches found for this competition
+            oddsmatcha_match_id = match.get('id')
+            match_name = match.get('name')
+            kickoff_time = match.get('kickoff_time')
+            minutes_until = match.get('minutes_until', 0)
+            competition = match.get('competition', 'Unknown')
+            
+            # Extract site IDs from mappings
+            mappings = match.get('mappings', {})
+            betfair_id = mappings.get('betfair')
+            
+            print(f"\n[{competition}] {match_name}")
+            print(f"  Kickoff: {kickoff_time.strftime('%H:%M')} (in {minutes_until:.1f}m)")
+            print(f"  OddsMatcha ID: {oddsmatcha_match_id}")
+            print(f"  Betfair: {betfair_id}")
+            print(f"  Virgin: {mappings.get('virginbet', 'N/A')}")
+            print(f"  WH: {mappings.get('williamhill', 'N/A')}")
+            if ENABLE_LADBROKES:
+                print(f"  Ladbrokes: {mappings.get('ladbrokes', 'N/A')}")
+            
+            # Skip if no Betfair ID (needed for player odds)
+            if not betfair_id:
+                print("  [SKIP] No Betfair ID available")
                 continue
+            
+            # Fetch Betfair market data for this match
+            try:
+                print(f"  -> Fetching Betfair odds...")
+                betfair_match = betfair.fetch_single_match(betfair_id)
+                if not betfair_match:
+                    print("  [SKIP] Failed to fetch Betfair match data")
+                    continue
+                
+                mnodes = betfair_match.get('market_nodes') or []
+                if mnodes:
+                    # Define match variables for use in alerts
+                    mname = match_name
+                    ko_str = kickoff_time.strftime('%H:%M')
+                    cname = competition
+                    
+                    # Use mappings from OddsMatcha API directly
+                    # Fetch exchange odds and lineups using OddsMatcha ID
+                    exchange_odds = {}
+                    confirmed_starters = set()
+                    
+                    # Optionally fetch additional exchange odds for debugging/augmentation
+                    if ENABLE_ADDITIONAL_EXCHANGES:
+                        exchange_odds = fetch_exchange_odds(oddsmatcha_match_id)
+                        if exchange_odds:
+                            total_exchange_players = sum(len(players) for players in exchange_odds.values())
+                            print(f"    [EXCHANGE] Loaded odds for {total_exchange_players} players from alternative exchanges")
+                            # Output detailed exchange odds by market and player
+                            for market_type, players_dict in exchange_odds.items():
+                                for player_name, odds_list in players_dict.items():
+                                    for odd in odds_list:
+                                        site_name = odd.get('site_name', 'Unknown').lower()
+                                        if player_name and site_name != 'unknown':
+                                            track_player_name(player_name, site_name)
+                                        lay_odds = odd.get('lay_odds', 'N/A')
+                                        liquidity = odd.get('liquidity', 'None')
+                                        liquidity_str = f"£{int(liquidity)}" if liquidity else "None"
+                                        print(f"      - {player_name} ({market_type}): {site_name} @ {lay_odds} (Liquidity: {liquidity_str})")
 
-            for m in matches:
-                total_matches_checked += 1
-                mid = m.get('id')
-                mname = m.get('name')
-                kickoff = m.get('openDate')
-                print(f"  - {mid}: {mname} @ {kickoff}")
-                # If the match is today (UTC), fetch odds for the TO_SCORE market
-
-                if kickoff:
-                    kt = datetime.fromisoformat(kickoff.replace('Z', '+00:00'))
-                    ko_str = kt.strftime("%H:%M")
-                    now_utc = datetime.now(timezone.utc)
-                    # consider matches within the next x minutes (inclusive)
-                    # compute minutes until kickoff and respect WINDOW_MINUTES
-                    minutes_until = (kt - now_utc).total_seconds() / 60.0
-                    if 0 <= minutes_until <= WINDOW_MINUTES:
-                        print(f"    -> Match within next {WINDOW_MINUTES} minutes; fetching odds... (in {minutes_until:.1f}m)")
-                        # If the fetch_matches_for_competition response included market_nodes with TO_SCORE markets,
-                        # call _fetch_market_odds directly using the known market id(s).
-                        mnodes = m.get('market_nodes') or []
-                        if mnodes:
-                            # Fetch site mappings and exchange odds once per match
-                            target_sites = ['virginbet', 'williamhill']
-                            if ENABLE_LADBROKES:
-                                target_sites.append('ladbrokes')
-                            mappings, oddsmatcha_match_id = map_betfair_to_sites(mid, target_sites)
-                            # Ensure mappings is always a dict
-                            mappings = dict(mappings or {})
-                            # Hardcoded Ladbrokes mappings: oddsmatcha_id -> ladbrokes_id
+                    # Fetch confirmed starters (lineups) regardless of exchanges
+                    confirmed_starters = fetch_lineups(oddsmatcha_match_id)
+                    print(f"    [DEBUG] Confirmed starters fetched: {len(confirmed_starters)} players - {confirmed_starters}")
+                    
+                    # Fetch OddsChecker match slug once per match (for ARB alerts)
+                    match_slug = None
+                    if ENABLE_ODDSCHECKER:
+                        oddschecker_id = mappings.get('oddschecker')
+                        if oddschecker_id:
+                            match_slug = get_oddschecker_match_slug(oddschecker_id)
+                            if match_slug:
+                                print(f"    [OC] Match slug: {match_slug}")
+                    
+                    # Initialize WH client once per match if enabled
+                    wh_client = None
+                    wh_match_id = mappings.get('williamhill')
+                    wh_offer_checked = False
+                    
+                    # Only fetch WH prices if we have lineup data
+                    if ENABLE_WILLIAMHILL and wh_match_id and confirmed_starters:
+                        # Check if match is in the WH offer
+                        if is_match_in_wh_offer(wh_match_id):
+                            wh_offer_checked = True
                             try:
-                                ladb_map = {
-                                    3642: '253829365',
-                                    3643: '253829371',
-                                    3613: '253829368',
-                                    3614: '253829369',
-                                    3615: '253829366',
-                                    3616: '253829370',
-                                    3644: '253829367',
-                                    3617: '253829372',
-                                    3645: '253829373',
-                                    3618: '253792159',
-                                    3663: '253818695'
-                                }
-                                key = None
-                                try:
-                                    key = int(oddsmatcha_match_id) if oddsmatcha_match_id is not None else None
-                                except Exception:
-                                    key = None
-                                if key in ladb_map:
-                                    mappings['ladbrokes'] = ladb_map[key]
-                                    print(f"[LADBROKES] Applied hardcoded mapping for oddsmatcha {key} -> {ladb_map[key]}")
-                            except Exception:
-                                pass
-                            exchange_odds = {}
-                            confirmed_starters = set()
-                            if oddsmatcha_match_id:
-                                # Optionally fetch additional exchange odds for debugging/augmentation
-                                if ENABLE_ADDITIONAL_EXCHANGES:
-                                    exchange_odds = fetch_exchange_odds(oddsmatcha_match_id)
-                                    if exchange_odds:
-                                        total_exchange_players = sum(len(players) for players in exchange_odds.values())
-                                        print(f"    [EXCHANGE] Loaded odds for {total_exchange_players} players from alternative exchanges")
-                                        # Output detailed exchange odds by market and player
-                                        for market_type, players_dict in exchange_odds.items():
-                                            for player_name, odds_list in players_dict.items():
-                                                for odd in odds_list:
-                                                    site_name = odd.get('site_name', 'Unknown').lower()
-                                                    if player_name and site_name != 'unknown':
-                                                        track_player_name(player_name, site_name)
-                                                    lay_odds = odd.get('lay_odds', 'N/A')
-                                                    liquidity = odd.get('liquidity', 'None')
-                                                    liquidity_str = f"£{int(liquidity)}" if liquidity else "None"
-                                                    print(f"      - {player_name} ({market_type}): {site_name} @ {lay_odds} (Liquidity: {liquidity_str})")
-
-                                # Fetch confirmed starters (lineups) regardless of exchanges
-                                confirmed_starters = fetch_lineups(oddsmatcha_match_id)
-                                print(f"    [DEBUG] Confirmed starters fetched: {len(confirmed_starters)} players - {confirmed_starters}")
-                            
-                            # Fetch OddsChecker match slug once per match (for ARB alerts)
-                            match_slug = None
-                            if ENABLE_ODDSCHECKER:
-                                match_slug = get_oddschecker_match_slug(mid)
-                                if match_slug:
-                                    print(f"    [OC] Match slug: {match_slug}")
-                            
-                            # Initialize WH client once per match if enabled
-                            wh_client = None
-                            wh_match_id = mappings.get('williamhill')
-                            wh_offer_checked = False
-                            
-                            # Only fetch WH prices if we have lineup data
-                            if ENABLE_WILLIAMHILL and wh_match_id and confirmed_starters:
-                                
-                                if wh_match_id:
-                                    # Check if match is in the WH offer
-                                    if is_match_in_wh_offer(wh_match_id):
-                                        wh_offer_checked = True
-                                        try:
-                                            from willhill_betbuilder import BetBuilderClient
-                                            wh_client = BetBuilderClient()
-                                            if not wh_client.load_event(wh_match_id):
-                                                print(f"Failed to load WH event {wh_match_id}")
-                                                wh_client = None
-                                            else:
-                                                print(f"[WH] Loaded event {wh_match_id} for reuse across players")
-                                                
-                                                # Fetch and track base WH goalscorer odds
-                                                base_odds = get_wh_base_goalscorer_odds(wh_client, wh_match_id)
-                                                changed_base_markets = set()
-                                                if base_odds:
-                                                    print(f"[WH] Fetched {len(base_odds)} base goalscorer odds")
-                                                    changed_base_markets = track_wh_base_odds(wh_match_id, mname, base_odds, run_number=run_number)
-                                        except Exception as e:
-                                            print(f"Error loading WH client: {e}")
-                                            wh_client = None
-                                    else:
-                                        print(f"Match {wh_match_id} not in WH offer; skipping all WH checks for this match")
+                                from willhill_betbuilder import BetBuilderClient
+                                wh_client = BetBuilderClient()
+                                if not wh_client.load_event(wh_match_id):
+                                    print(f"Failed to load WH event {wh_match_id}")
+                                    wh_client = None
                                 else:
-                                    print(f"No WH mapping for Betfair {mid}; skipping all WH checks for this match")
+                                    print(f"[WH] Loaded event {wh_match_id} for reuse across players")
+                                    
+                                    # Fetch and track base WH goalscorer odds
+                                    base_odds = get_wh_base_goalscorer_odds(wh_client, wh_match_id)
+                                    changed_base_markets = set()
+                                    if base_odds:
+                                        print(f"[WH] Fetched {len(base_odds)} base goalscorer odds")
+                                        changed_base_markets = track_wh_base_odds(wh_match_id, mname, base_odds, run_number=run_number)
+                            except Exception as e:
+                                print(f"Error loading WH client: {e}")
+                                wh_client = None
+                        else:
+                            print(f"Match {wh_match_id} not in WH offer; skipping all WH checks for this match")
+                    else:
+                        if not wh_match_id:
+                            print(f"No WH mapping for Betfair {betfair_id}; skipping all WH checks for this match")
+                    
+                    # Initialize Ladbrokes client once per match if enabled
+                    ladbrokes_client = None
+                    ladbrokes_match_id = mappings.get('ladbrokes')
+                    if ENABLE_LADBROKES and ladbrokes_match_id and LadbrokesAlerts is not None:
+                        try:
+                            ladbrokes_client = LadbrokesAlerts()
+                            print(f"[LADBROKES] Initialized client for match {ladbrokes_match_id}")
+                        except Exception as e:
+                            print(f"Failed to init Ladbrokes client: {e}")
+                    
+                    # Build supported_markets mapping from nodes
+                    supported = {}
+                    for node in mnodes:
+                        desc = node.get('description', {}) if isinstance(node, dict) else {}
+                        mtype = desc.get('marketType') or node.get('marketType') or ''
+                        midid = node.get('marketId') or node.get('market_id') or node.get('marketId')
+                        if (mtype == betfair.FGS_MARKET_NAME or mtype == betfair.AGS_MARKET_NAME) and midid:
+                            if mtype == betfair.FGS_MARKET_NAME:    
+                                supported[mtype] = {'market_id': midid, 'market_name': desc.get('marketName', ''), 'internal_market_name': 'FGS'}
+                            else:
+                                supported[mtype] = {'market_id': midid, 'market_name': desc.get('marketName', ''), 'internal_market_name': 'AGS'}
+                            # call _fetch_market_odds for this market id
+                            try:
+                                betfair_odds = betfair._fetch_market_odds(str(midid), supported, betfair_match)
+                            except Exception as e:
+                                print(f"    Error fetching market {midid}: {e}")
+                                betfair_odds = []
                             
-                            # build supported_markets mapping from nodes
-                            # Initialize Ladbrokes client once per match if enabled
-                            ladbrokes_client = None
-                            ladbrokes_match_id = mappings.get('ladbrokes')
-                            if ENABLE_LADBROKES and ladbrokes_match_id and LadbrokesAlerts is not None:
-                                try:
-                                    ladbrokes_client = LadbrokesAlerts()
-                                    print(f"[LADBROKES] Initialized client for match {ladbrokes_match_id}")
-                                except Exception as e:
-                                    print(f"Failed to init Ladbrokes client: {e}")
-                            supported = {}
-                            for node in mnodes:
-                                desc = node.get('description', {}) if isinstance(node, dict) else {}
-                                mtype = desc.get('marketType') or node.get('marketType') or ''
-                                midid = node.get('marketId') or node.get('market_id') or node.get('marketId')
-                                if (mtype == betfair.FGS_MARKET_NAME or mtype == betfair.AGS_MARKET_NAME) and midid:
-                                    if mtype == betfair.FGS_MARKET_NAME:    
-                                        supported[mtype] = {'market_id': midid, 'market_name': desc.get('marketName', ''), 'internal_market_name': 'FGS'}
+                            # Combine Betfair and exchange odds
+                            market_type = 'First Goalscorer' if mtype == betfair.FGS_MARKET_NAME else 'Anytime Goalscorer'
+                            all_odds = combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type)
+                            
+                            # Group odds by player name to collect all exchanges for each player
+                            player_odds_map = {}
+                            for odd_entry in all_odds:
+                                pname = odd_entry['player_name']
+                                if pname not in player_odds_map:
+                                    player_odds_map[pname] = []
+                                player_odds_map[pname].append(odd_entry)
+                            
+                            # Process each player (only once, with all their exchange odds)
+                            for pname, player_exchanges in player_odds_map.items():
+                                # Track this player for all exchange sites they appear on
+                                for exch in player_exchanges:
+                                    site = exch.get('site', '').lower()
+                                    if site and pname:
+                                        track_player_name(pname, site)
+                                total_players_processed += 1
+                                
+                                # Find the best (lowest) lay odds and largest size for threshold checks
+                                best_odds = min(player_exchanges, key=lambda x: x['lay_odds'])
+                                price = best_odds['lay_odds']
+                                lay_size = best_odds['lay_size']
+                                has_size = best_odds['has_size']
+                                
+                                # Collect all exchange lay prices for display
+                                all_lay_prices = []
+                                for exchange in player_exchanges:
+                                    site = exchange['site']
+                                    odds = exchange['lay_odds']
+                                    size = exchange['lay_size']
+                                    if exchange['has_size']:
+                                        all_lay_prices.append(f"{site} @ {odds} (£{int(size)})")
                                     else:
-                                        supported[mtype] = {'market_id': midid, 'market_name': desc.get('marketName', ''), 'internal_market_name': 'AGS'}
-                                    # call _fetch_market_odds for this market id
-                                    try:
-                                        betfair_odds = betfair._fetch_market_odds(str(midid), supported, m)
-                                    except Exception as e:
-                                        print(f"    Error fetching market {midid}: {e}")
-                                        betfair_odds = []
-                                    
-                                    # Combine Betfair and exchange odds
-                                    market_type = 'First Goalscorer' if mtype == betfair.FGS_MARKET_NAME else 'Anytime Goalscorer'
-                                    all_odds = combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type)
-                                    
-                                    # Group odds by player name to collect all exchanges for each player
-                                    player_odds_map = {}
-                                    for odd_entry in all_odds:
-                                        pname = odd_entry['player_name']
-                                        if pname not in player_odds_map:
-                                            player_odds_map[pname] = []
-                                        player_odds_map[pname].append(odd_entry)
-                                    
-                                    # Process each player (only once, with all their exchange odds)
-                                    for pname, player_exchanges in player_odds_map.items():
-                                        # Track this player for all exchange sites they appear on
-                                        for exch in player_exchanges:
-                                            site = exch.get('site', '').lower()
-                                            if site and pname:
-                                                track_player_name(pname, site)
-                                        total_players_processed += 1
-                                        
-                                        # Find the best (lowest) lay odds and largest size for threshold checks
-                                        best_odds = min(player_exchanges, key=lambda x: x['lay_odds'])
-                                        price = best_odds['lay_odds']
-                                        lay_size = best_odds['lay_size']
-                                        has_size = best_odds['has_size']
-                                        
-                                        # Collect all exchange lay prices for display
-                                        all_lay_prices = []
-                                        for exchange in player_exchanges:
-                                            site = exchange['site']
-                                            odds = exchange['lay_odds']
-                                            size = exchange['lay_size']
-                                            if exchange['has_size']:
-                                                all_lay_prices.append(f"{site} @ {odds} (£{int(size)})")
-                                            else:
-                                                all_lay_prices.append(f"{site} @ {odds}")
-                                        lay_prices_text = " | ".join(all_lay_prices)
-                                        
-                                        # GOOSE ALERTS (only for Betfair with size and confirmed starters)
-                                        if ENABLE_VIRGIN_GOOSE and mtype == betfair.AGS_MARKET_NAME and has_size and lay_size >= GBP_THRESHOLD_GOOSE:
-                                            skip = False
-                                            if price < GOOSE_MIN_ODDS:
-                                                skip = True
-                                            virgin_id = mappings.get('virginbet')
-                                            if not virgin_id:
-                                                skip = True
-                                            if already_alerted(pname,mid,GOOSE_STATE_FILE):
-                                                skip = True
-                                            # Only alert if player is a confirmed starter
-                                            if confirmed_starters and not is_confirmed_starter(pname, confirmed_starters):
-                                                skip = True
-                                                print(f"      [DEBUG] {pname} is NOT a confirmed starter - skipping GOOSE alert")
-                                            if not skip:
+                                        all_lay_prices.append(f"{site} @ {odds}")
+                                lay_prices_text = " | ".join(all_lay_prices)
+                                
+                                # GOOSE ALERTS (only for Betfair with size and confirmed starters)
+                                if ENABLE_VIRGIN_GOOSE and mtype == betfair.AGS_MARKET_NAME and has_size and lay_size >= GBP_THRESHOLD_GOOSE:
+                                    skip = False
+                                    if price < GOOSE_MIN_ODDS:
+                                        skip = True
+                                    virgin_id = mappings.get('virginbet')
+                                    if not virgin_id:
+                                        skip = True
+                                    if already_alerted(pname, betfair_id, GOOSE_STATE_FILE):
+                                        skip = True
+                                    # Only alert if player is a confirmed starter
+                                    if confirmed_starters and not is_confirmed_starter(pname, confirmed_starters):
+                                        skip = True
+                                        print(f"      [DEBUG] {pname} is NOT a confirmed starter - skipping GOOSE alert")
+                                    if not skip:
                                                 virgin_markets = getVirginMarkets(virgin_id)
                                                 player_data = find_player_sot_and_ga_ids(virgin_markets, pname)
                                                 if player_data:
@@ -2274,353 +2594,371 @@ def main():
                                                         if DISCORD_GOOSE_CHANNEL_ID:
                                                             #print("SENDING")
                                                             send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT",icon=GOOSE_FOOTER_ICON_URL)
-                                                        save_state(pname,mid, GOOSE_STATE_FILE)
-                                        # ARB ALERTS
-                                        if ENABLE_ODDSCHECKER and (not has_size or lay_size > GBP_ARB_THRESHOLD):
-                                            if mtype == betfair.FGS_MARKET_NAME:
-                                                bettype = "First Goalscorer"
-                                                label = "FGS"
-                                            elif mtype == betfair.AGS_MARKET_NAME:
-                                                bettype = "Anytime Goalscorer"
-                                                label = "AGS"
-                                            if already_alerted(pname,mid,ARB_STATE_FILE, market=label):
-                                                continue
-                                            
-                                            # Use pre-fetched match slug (fetched once per match)
-                                            if not match_slug:
-                                                continue
-                                            
-                                            # BUILD THE JSON FOR THIS BET ['First Goalscorer','Anytime Goalscorer']
-                                            betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
-                                            arb_opportunities = get_oddschecker_odds(match_slug, betfair_lay_bet)
+                                                        save_state(pname, betfair_id, GOOSE_STATE_FILE)
+                                
+                                # ARB ALERTS
+                                if ENABLE_ODDSCHECKER and (not has_size or lay_size > GBP_ARB_THRESHOLD):
+                                    if mtype == betfair.FGS_MARKET_NAME:
+                                        bettype = "First Goalscorer"
+                                        label = "FGS"
+                                    elif mtype == betfair.AGS_MARKET_NAME:
+                                        bettype = "Anytime Goalscorer"
+                                        label = "AGS"
+                                    if already_alerted(pname, betfair_id, ARB_STATE_FILE, market=label):
+                                        continue
+                                    
+                                    # Use pre-fetched match slug (fetched once per match)
+                                    if not match_slug:
+                                        continue
+                                    
+                                    # BUILD THE JSON FOR THIS BET ['First Goalscorer','Anytime Goalscorer']
+                                    betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
+                                    arb_opportunities = get_oddschecker_odds(match_slug, betfair_lay_bet)
 
-                                            # Send separate arbitrage message if configured
-                                            if arb_opportunities and DISCORD_ARB_CHANNEL_ID:
-                                                # Calculate max OddsChecker odds for title
-                                                max_oc_odds = max(arb['odds'] for arb in arb_opportunities) if arb_opportunities else 0
-                                                rating_pct = (max_oc_odds / price * 100)
-                                                arb_title = f"{pname} ({label}) - {max_oc_odds:.2f}/{price:.2f} ({rating_pct:.1f}%)"
-                                                arb_fields = [
-                                                    ("Back Sites", "\n".join([f"{arb['bookie']} @ {arb['odds']:.2f}" for arb in arb_opportunities])),
-                                                    ("BFEX Link", f"[Open Market](https://www.betfair.com/exchange/plus/football/market/{midid})"),
-                                                ]
+                                    # Send separate arbitrage message if configured
+                                    if arb_opportunities and DISCORD_ARB_CHANNEL_ID:
+                                        # Calculate max OddsChecker odds for title
+                                        max_oc_odds = max(arb['odds'] for arb in arb_opportunities) if arb_opportunities else 0
+                                        rating_pct = (max_oc_odds / price * 100)
+                                        arb_title = f"{pname} ({label}) - {max_oc_odds:.2f}/{price:.2f} ({rating_pct:.1f}%)"
+                                        arb_fields = [
+                                            ("Back Sites", "\n".join([f"{arb['bookie']} @ {arb['odds']:.2f}" for arb in arb_opportunities])),
+                                            ("BFEX Link", f"[Open Market](https://www.betfair.com/exchange/plus/football/market/{midid})"),
+                                        ]
+                                        
+                                        # Build description with optional Confirmed Starter
+                                        starter_line = ""
+                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                            starter_line = "\nConfirmed Starter ✅"
+                                        
+                                        desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}"
                                                 
-                                                # Build description with optional Confirmed Starter
-                                                starter_line = ""
-                                                if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
-                                                    starter_line = "\nConfirmed Starter ✅"
-                                                
-                                                desc = f"**{mname}** ({ko_str})\n{cname}{starter_line}\n\n**Lay Prices:** {lay_prices_text}"
-                                                        
-                                                # Add confirmed starter field if applicable
-                                                if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
-                                                    arb_fields.append(("Confirmed Starter", "✅"))
-                                                
-                                                if match_slug:
-                                                    arb_fields.append(("OC Link", f"[View OC](https://www.oddschecker.com/football/{match_slug})"))
-                                                if DISCORD_ARB_CHANNEL_ID:
-                                                    send_discord_embed(arb_title, desc, arb_fields, colour=0xFFB80C, channel_id=DISCORD_ARB_CHANNEL_ID)
-                                                save_state(f"{pname}_{label}",mid, ARB_STATE_FILE)
-                                        # WILLIAM HILL ALERTS
-                                        # Reuse the WH client initialized for this match
-                                        if wh_client and (not has_size or lay_size > GBP_WH_THRESHOLD):
-                                            if mtype == betfair.FGS_MARKET_NAME:
-                                                bettype = "First Goalscorer"
-                                                label = "FGS"
-                                            elif mtype == betfair.AGS_MARKET_NAME:
-                                                bettype = "Anytime Goalscorer"
-                                                label = "AGS"
-                                            else:
-                                                continue
+                                        # Add confirmed starter field if applicable
+                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                            arb_fields.append(("Confirmed Starter", "✅"))
+                                        
+                                        if match_slug:
+                                            arb_fields.append(("OC Link", f"[View OC](https://www.oddschecker.com/football/{match_slug})"))
+                                        if DISCORD_ARB_CHANNEL_ID:
+                                            send_discord_embed(arb_title, desc, arb_fields, colour=0xFFB80C, channel_id=DISCORD_ARB_CHANNEL_ID)
+                                        save_state(f"{pname}_{label}", betfair_id, ARB_STATE_FILE)
+                                
+                                # WILLIAM HILL ALERTS
+                                # Reuse the WH client initialized for this match
+                                if wh_client and (not has_size or lay_size > GBP_WH_THRESHOLD):
+                                    if mtype == betfair.FGS_MARKET_NAME:
+                                        bettype = "First Goalscorer"
+                                        label = "FGS"
+                                    elif mtype == betfair.AGS_MARKET_NAME:
+                                        bettype = "Anytime Goalscorer"
+                                        label = "AGS"
+                                    else:
+                                        continue
+                                    
+                                    print(f"[WH] Checking {pname} {label} (Lay @ {price})")
+                                    
+                                    if already_alerted(pname, wh_match_id, WH_STATE_FILE, market=label):
+                                        continue
+                                    
+                                    # GET WILLIAM HILL BB ODDS HERE
+                                    betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
+                                    try:
+                                        combos = wh_client.get_player_combinations(
+                                            player_name=pname,
+                                            template_name=bettype,
+                                            get_price=False  # Get combo first without price
+                                        )
+                                        
+                                        if not combos:
+                                            print(f"[WH] No combos found for {pname} {label}")
+                                            continue
+                                        
+                                        combo = combos[0]
+                                        if not combo.get('success'):
+                                            error_msg = combo.get('error', 'Unknown error')
+                                            print(f"[WH] Combo unsuccessful for {pname} {label}: {error_msg}")
+                                            continue
+                                        
+                                        # Determine if we should fetch price based on mode
+                                        should_fetch_price = False
+                                        force_refresh = False
+                                        
+                                        if WH_PRICING_MODE == 1:
+                                            # Mode 1: Only fetch if no cache OR base odds changed
+                                            base_changed = (pname, label) in changed_base_markets
+                                            has_cache = wh_client.generator.has_cached_price(combo)
                                             
-                                            print(f"[WH] Checking {pname} {label} (Lay @ {price})")
-                                            
-                                            if already_alerted(pname, wh_match_id, WH_STATE_FILE, market=label):
-                                                continue
-                                            
-                                            # GET WILLIAM HILL BB ODDS HERE
-                                            betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
-                                            try:
-                                                combos = wh_client.get_player_combinations(
-                                                    player_name=pname,
-                                                    template_name=bettype,
-                                                    get_price=False  # Get combo first without price
-                                                )
-                                                
-                                                if not combos:
-                                                    print(f"[WH] No combos found for {pname} {label}")
-                                                    continue
-                                                
-                                                combo = combos[0]
-                                                if not combo.get('success'):
-                                                    error_msg = combo.get('error', 'Unknown error')
-                                                    print(f"[WH] Combo unsuccessful for {pname} {label}: {error_msg}")
-                                                    continue
-                                                
-                                                # Determine if we should fetch price based on mode
-                                                should_fetch_price = False
+                                            if base_changed:
+                                                should_fetch_price = True
+                                                force_refresh = True
+                                                print(f"[WH MODE1] Base odds changed for {pname} {label} - forcing fresh price lookup")
+                                            elif not has_cache:
+                                                should_fetch_price = True
                                                 force_refresh = False
-                                                
-                                                if WH_PRICING_MODE == 1:
-                                                    # Mode 1: Only fetch if no cache OR base odds changed
-                                                    base_changed = (pname, label) in changed_base_markets
-                                                    has_cache = wh_client.generator.has_cached_price(combo)
-                                                    
-                                                    if base_changed:
-                                                        should_fetch_price = True
-                                                        force_refresh = True
-                                                        print(f"[WH MODE1] Base odds changed for {pname} {label} - forcing fresh price lookup")
-                                                    elif not has_cache:
-                                                        should_fetch_price = True
-                                                        force_refresh = False
-                                                        print(f"[WH MODE1] No cached price for {pname} {label} - fetching price")
-                                                    else:
-                                                        print(f"[WH MODE1] Using cached price for {pname} {label} (base odds unchanged)")
+                                                print(f"[WH MODE1] No cached price for {pname} {label} - fetching price")
+                                            else:
+                                                print(f"[WH MODE1] Using cached price for {pname} {label} (base odds unchanged)")
+                                        else:
+                                            # Mode 2: Always fetch with 5-minute cache timeout (existing behavior)
+                                            should_fetch_price = True
+                                            force_refresh = False
+                                            print(f"[WH MODE2] Fetching price for {pname} {label} (5-min cache)")
+                                        
+                                        if not should_fetch_price:
+                                            continue
+                                        
+                                        price_data = wh_client.get_combination_price(combo, use_cache=(not force_refresh))
+                                        
+                                        if price_data and price_data.get('success'):
+                                            wh_odds = price_data.get('odds',0)
+                                            original_wh_odds = wh_odds
+                                            boosted_odds = wh_odds
+                                            
+                                            if float(wh_odds) >= 4:
+                                                # Boosting odds by 25%
+                                                boosted_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
+                                                print(f"[WH] {pname} {label}: WH odds {original_wh_odds} boosted to {boosted_odds} vs Lay {price}")
+                                            else:
+                                                print(f"[WH] {pname} {label}: WH @ {wh_odds} vs Lay @ {price}")
+                                            
+                                            # Track odds for analysis (includes combo details)
+                                            track_wh_odds(
+                                                match_id=wh_match_id,
+                                                match_name=mname,
+                                                player_name=pname,
+                                                market_type=label,
+                                                wh_odds=original_wh_odds,
+                                                boosted_odds=boosted_odds,
+                                                lay_odds=price,
+                                                combo_data=combo if combo else None,
+                                                run_number=run_number
+                                            )
+                                            
+                                            # Send separate WH message if configured
+                                            if DISCORD_WH_CHANNEL_ID:
+                                                # Require lineup confirmation before sending WH alert
+                                                if not confirmed_starters:
+                                                    print(f"[WH] Skipping alert for {pname} - no lineup data available")
+                                                elif not is_confirmed_starter(pname, confirmed_starters):
+                                                    print(f"[WH] Skipping alert for {pname} - not in confirmed starters")
                                                 else:
-                                                    # Mode 2: Always fetch with 5-minute cache timeout (existing behavior)
-                                                    should_fetch_price = True
-                                                    force_refresh = False
-                                                    print(f"[WH MODE2] Fetching price for {pname} {label} (5-min cache)")
-                                                
-                                                if not should_fetch_price:
-                                                    continue
-                                                
-                                                price_data = wh_client.get_combination_price(combo, use_cache=(not force_refresh))
-                                                
-                                                if price_data and price_data.get('success'):
-                                                    wh_odds = price_data.get('odds',0)
-                                                    original_wh_odds = wh_odds
-                                                    boosted_odds = wh_odds
-                                                    
-                                                    if float(wh_odds) >= 4:
-                                                        # Boosting odds by 25%
-                                                        boosted_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
-                                                        print(f"[WH] {pname} {label}: WH odds {original_wh_odds} boosted to {boosted_odds} vs Lay {price}")
-                                                    else:
-                                                        print(f"[WH] {pname} {label}: WH @ {wh_odds} vs Lay @ {price}")
-                                                    
-                                                    # Track odds for analysis (includes combo details)
-                                                    track_wh_odds(
-                                                        match_id=wh_match_id,
-                                                        match_name=mname,
-                                                        player_name=pname,
-                                                        market_type=label,
-                                                        wh_odds=original_wh_odds,
-                                                        boosted_odds=boosted_odds,
-                                                        lay_odds=price,
-                                                        combo_data=combo if combo else None,
-                                                        run_number=run_number
-                                                    )
-                                                    
-                                                    # Send separate WH message if configured
-                                                    if DISCORD_WH_CHANNEL_ID:
-                                                        # Require lineup confirmation before sending WH alert
-                                                        if not confirmed_starters:
-                                                            print(f"[WH] Skipping alert for {pname} - no lineup data available")
-                                                        elif not is_confirmed_starter(pname, confirmed_starters):
-                                                            print(f"[WH] Skipping alert for {pname} - not in confirmed starters")
-                                                        else:
-                                                            if boosted_odds >= float(betfair_lay_bet[0]['lay_odds']):
-                                                                rating = round(boosted_odds / price * 100, 2)
-                                                                title = f"{pname} - {label} - {boosted_odds}/{price} ({rating}%)"
+                                                    if boosted_odds >= float(betfair_lay_bet[0]['lay_odds']):
+                                                        rating = round(boosted_odds / price * 100, 2)
+                                                        title = f"{pname} - {label} - {boosted_odds}/{price} ({rating}%)"
 
-                                                                desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
-                                                                fields = []
+                                                        desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
+                                                        fields = []
 
-                                                                # Add confirmed starter field if applicable
-                                                                if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
-                                                                    fields.append(("Confirmed Starter", "✅"))
-                                                                #build footer
-                                                                if label == "FGS":
-                                                                    footer_text = f"{pname} FGS + AGS + Over 0.5 Goals"
-                                                                elif label == "AGS":
-                                                                    footer_text = f"{pname} AGS + G/A + Over 0.5 Goals"
-                                                                send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID, footer=footer_text)
-                                                                save_state(f"{pname}_{label}", wh_match_id, WH_STATE_FILE)
-                                                                print(f"[WH ALERT] {pname} {label} @ {boosted_odds} (rating: {rating}%)")
-                                                            
-                                                            # Send Smarkets-only alert if configured and Smarkets lay is available
-                                                            if DISCORD_WH_SMARKETS_CHANNEL_ID and not already_alerted(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE):
-                                                                # Check if Smarkets lay price is available
-                                                                has_smarkets = False
-                                                                smarkets_price = None
-                                                                smarkets_liquidity = None
-                                                                
-                                                                for exchange in player_exchanges:
-                                                                    if exchange['site'].lower() == 'smarkets':
-                                                                        has_smarkets = True
-                                                                        smarkets_price = exchange['lay_odds']
-                                                                        smarkets_liquidity = exchange['lay_size']
-                                                                        break
-                                                                
-                                                                if has_smarkets and boosted_odds >= smarkets_price:
-                                                                    # Build Smarkets-only description (no Betfair mention)
-                                                                    smarkets_lay_text = f"Smarkets @ {smarkets_price}"
-                                                                    if smarkets_liquidity:
-                                                                        smarkets_lay_text += f" (£{int(smarkets_liquidity)})"
-                                                                    
-                                                                    rating_sm = round(boosted_odds / smarkets_price * 100, 2)
-                                                                    title_sm = f"{pname} - {label} - {boosted_odds}/{smarkets_price} ({rating_sm}%)"
-                                                                    desc_sm = f"**{mname}** ({ko_str})\n{cname}\nConfirmed Starter ✅\n\n**Lay Price:** {smarkets_lay_text}"
-                                                                    
-                                                                    fields_sm = [("Confirmed Starter", "✅")]
-                                                                    
-                                                                    # Use same footer as main WH alert
-                                                                    footer_text_sm = footer_text
-                                                                    
-                                                                    send_discord_embed(title_sm, desc_sm, fields_sm, colour=0x00143C, 
-                                                                                     channel_id=DISCORD_WH_SMARKETS_CHANNEL_ID, 
-                                                                                     footer=footer_text_sm,
-                                                                                     bot_token=DISCORD_BOT_TOKEN_SMARKETS)
-                                                                    save_state(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE)
-                                                                    print(f"[WH SMARKETS ALERT] {pname} {label} @ {boosted_odds} vs Smarkets @ {smarkets_price} (rating: {rating_sm}%)")
-                                                            
-                                                            else:
-                                                                print(f"[WH] No alert - WH odds {boosted_odds} < Lay {price}")
-                                                else:
-                                                    print(f"[WH] Failed to get price for {pname} {label}")
-                                                    continue
+                                                        # Add confirmed starter field if applicable
+                                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                                            fields.append(("Confirmed Starter", "✅"))
+                                                        #build footer
+                                                        if label == "FGS":
+                                                            footer_text = f"{pname} FGS + AGS + Over 0.5 Goals"
+                                                        elif label == "AGS":
+                                                            footer_text = f"{pname} AGS + G/A + Over 0.5 Goals"
+                                                        send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID, footer=footer_text)
+                                                        save_state(f"{pname}_{label}", wh_match_id, WH_STATE_FILE)
+                                                        print(f"[WH ALERT] {pname} {label} @ {boosted_odds} (rating: {rating}%)")
+                                                    
+                                                    # Send Smarkets-only alert if configured and Smarkets lay is available
+                                                    if DISCORD_WH_SMARKETS_CHANNEL_ID and not already_alerted(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE):
+                                                        # Check if Smarkets lay price is available
+                                                        has_smarkets = False
+                                                        smarkets_price = None
+                                                        smarkets_liquidity = None
                                                         
-                                            except Exception as e:
-                                                print(f"Error getting WH odds: {e}")
-                                                traceback.print_exc()
-                                                continue
-        
-                                                            # Also attempt Ladbrokes combos if configured
-                                        if ENABLE_LADBROKES and 'ladbrokes_client' in locals() and ladbrokes_client and ladbrokes_match_id:
-
-                                            lb = get_ladbrokes_player_combos(ladbrokes_client, ladbrokes_match_id, pname)
-                                            if lb:
-                                                if mtype == betfair.FGS_MARKET_NAME:
-                                                    bettype = "First Goalscorer"
-                                                    label = "FGS"
-                                                    odds = lb.get('fgs_combo',0)
-                                                elif mtype == betfair.AGS_MARKET_NAME:
-                                                    bettype = "Anytime Goalscorer"
-                                                    label = "AGS"
-                                                    odds = lb.get('ags_combo',0)
-                                                else:
-                                                    continue
-                                                #print(f"  [LADBROKES] {pname} - AGS(combo): {lb.get('ags_combo')} | FGS+AGS(combo): {lb.get('fgs_combo')}")
-                                                betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
-                                                if already_alerted(pname, ladbrokes_match_id, LADBROKES_STATE_FILE, market=label):
-                                                    continue
-                                                # Check if match is in offer id 7 (Coral refund) or offer id 9 (Ladbrokes refund)
-                                                offer_id = None  # None = regular arb, 7 = Coral refund, 9 = Ladbrokes refund
-                                                try:
-                                                    # Check offer 7 (Coral)
-                                                    api = f"https://api.oddsmatcha.uk/offers/7"
-                                                    resp = requests.get(api, timeout=10)
-                                                    if resp.ok:
-                                                        data = resp.json()
-                                                        matches = data.get('matches', [])
-                                                        for match in matches:
-                                                            match_mappings = match.get('mappings', [])
-                                                            for mapping in match_mappings:
-                                                                if (mapping.get('site_name') == 'ladbrokes' and 
-                                                                    mapping.get('site_match_id') == ladbrokes_match_id):
-                                                                    offer_id = 7
-                                                                    break
-                                                            if offer_id:
+                                                        for exchange in player_exchanges:
+                                                            if exchange['site'].lower() == 'smarkets':
+                                                                has_smarkets = True
+                                                                smarkets_price = exchange['lay_odds']
+                                                                smarkets_liquidity = exchange['lay_size']
                                                                 break
+                                                        
+                                                        if has_smarkets and boosted_odds >= smarkets_price:
+                                                            # Build Smarkets-only description (no Betfair mention)
+                                                            smarkets_lay_text = f"Smarkets @ {smarkets_price}"
+                                                            if smarkets_liquidity:
+                                                                smarkets_lay_text += f" (£{int(smarkets_liquidity)})"
+                                                            
+                                                            rating_sm = round(boosted_odds / smarkets_price * 100, 2)
+                                                            title_sm = f"{pname} - {label} - {boosted_odds}/{smarkets_price} ({rating_sm}%)"
+                                                            desc_sm = f"**{mname}** ({ko_str})\n{cname}\nConfirmed Starter ✅\n\n**Lay Price:** {smarkets_lay_text}"
+                                                            
+                                                            fields_sm = [("Confirmed Starter", "✅")]
+                                                            
+                                                            # Use same footer as main WH alert
+                                                            footer_text_sm = footer_text
+                                                            
+                                                            send_discord_embed(title_sm, desc_sm, fields_sm, colour=0x00143C, 
+                                                                             channel_id=DISCORD_WH_SMARKETS_CHANNEL_ID, 
+                                                                             footer=footer_text_sm,
+                                                                             bot_token=DISCORD_BOT_TOKEN_SMARKETS)
+                                                            save_state(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE)
+                                                            print(f"[WH SMARKETS ALERT] {pname} {label} @ {boosted_odds} vs Smarkets @ {smarkets_price} (rating: {rating_sm}%)")
                                                     
-                                                    # Check offer 9 (Ladbrokes) if not in offer 7
-                                                    if not offer_id:
-                                                        api = f"https://api.oddsmatcha.uk/offers/9"
-                                                        resp = requests.get(api, timeout=10)
-                                                        if resp.ok:
-                                                            data = resp.json()
-                                                            matches = data.get('matches', [])
-                                                            for match in matches:
-                                                                match_mappings = match.get('mappings', [])
-                                                                for mapping in match_mappings:
-                                                                    if (mapping.get('site_name') == 'ladbrokes' and 
-                                                                        mapping.get('site_match_id') == ladbrokes_match_id):
-                                                                        offer_id = 9
-                                                                        break
-                                                                if offer_id:
-                                                                    break
-                                                    
-                                                    if offer_id:
-                                                        print(f"    [LADBROKES] Match {ladbrokes_match_id} is in Offer ID {offer_id}")
                                                     else:
-                                                        print(f"    [LADBROKES] Match {ladbrokes_match_id} is NOT in any refund offer")
-                                                except Exception as e:
-                                                    print(f"    [LADBROKES] Error checking offers: {e}")
-                                                    traceback.print_exc()
-                                                if DISCORD_LADBROKES_CHANNEL_ID or DISCORD_LADBROKES_CORAL_CHANNEL_ID or DISCORD_LADBROKES_BETGET_CHANNEL_ID:
-                                                    print(f"Comparison: {pname} {label} - Ladbrokes Odds: {odds} vs Lay Odds: {price}")
-                                                    try:
-                                                        valid_odds = isinstance(odds, (int, float))
-                                                        valid_price = isinstance(price, (int, float)) and price > 0
-                                                    except Exception:
-                                                        valid_odds = valid_price = False
-                                                    send_alert = False
-                                                    extra_note = ""
-                                                    if valid_odds and valid_price:
-                                                        if offer_id:  # Refund offer (7 or 9)
-                                                            match_pct = round(odds / price * 100, 2) if price > 0 else 0
-                                                            if match_pct >= LADBROKES_REFUND_OFFER_THRESHOLD:
-                                                                send_alert = True
-                                                                if offer_id == 7:
-                                                                    extra_note = f"\n\n**Coral Refund Offer active (Bet Builder B10G10)**"
-                                                                elif offer_id == 9:
-                                                                    extra_note = f"\n\n**Ladbrokes Refund Offer active (Bet Builder B10G10)**"
-                                                            else:
-                                                                print(f"[LADBROKES] Refund offer active, but odds only {match_pct}% of lay price (requires {LADBROKES_REFUND_OFFER_THRESHOLD}%+)")
-                                                        else:
-                                                            if odds >= price:
-                                                                send_alert = True
-                                                    if send_alert:
-                                                        if not confirmed_starters:
-                                                            print(f"[LAD] Would send alert for {pname} ({label}) - but no lineup data available. (Ladbrokes Odds: {odds} vs Lay Odds: {price})")
-                                                        elif not is_confirmed_starter(pname, confirmed_starters):
-                                                            print(f"[LAD] Would send alert for {pname} ({label}) - but not in confirmed starters. (Ladbrokes Odds: {odds} vs Lay Odds: {price})")
-                                                        else:
-                                                            try:
-                                                                rating = round(odds / price * 100, 2)
-                                                            except Exception:
-                                                                rating = 0
-                                                            
-                                                            # Determine prefix, color, and channel based on offer type and rating
-                                                            prefix = "[LAD]"
-                                                            colour = 0xF01E28  # Ladbrokes red
-                                                            channel_id = DISCORD_LADBROKES_CHANNEL_ID
-                                                            
-                                                            if offer_id == 7:  # Coral refund offer
-                                                                if rating >= 100:
-                                                                    # True arb - use main Ladbrokes channel
-                                                                    prefix = "[LAD]"
-                                                                    colour = 0xF01E28  # Ladbrokes red
-                                                                    channel_id = DISCORD_LADBROKES_CHANNEL_ID
-                                                                else:
-                                                                    # Sub-arb Coral offer - use Coral channel
-                                                                    prefix = "[CORAL]"
-                                                                    colour = 0x0050DE  # Coral blue
-                                                                    channel_id = DISCORD_LADBROKES_CORAL_CHANNEL_ID
-                                                            elif offer_id == 9:  # Ladbrokes refund offer
-                                                                if rating >= 100:
-                                                                    # True arb - use main Ladbrokes channel
-                                                                    prefix = "[LAD]"
-                                                                    colour = 0xF01E28  # Ladbrokes red
-                                                                    channel_id = DISCORD_LADBROKES_CHANNEL_ID
-                                                                else:
-                                                                    # Sub-arb Ladbrokes offer - use BetGet channel
-                                                                    prefix = "[LAD-OFFER]"
-                                                                    colour = 0xF01E28  # Ladbrokes red
-                                                                    channel_id = DISCORD_LADBROKES_BETGET_CHANNEL_ID
-                                                            # else: regular arb, already set above
-                                                            
-                                                            if channel_id:  # Only send if channel is configured
-                                                                title = f"{prefix} {pname} - {label} - {odds}/{price} ({rating}%)"
-                                                                desc = f"**{mname}** ({ko_str})\n{cname}\nConfirmed Starter ✅\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid}){extra_note}"
-                                                                fields = [("Confirmed Starter", "✅")]
-                                                                if label == "FGS":
-                                                                    footer_text = f"{pname} FGS + AGS"
-                                                                elif label == "AGS":
-                                                                    footer_text = f"{pname} AGS + Over 0.5 Goals"
-                                                                send_discord_embed(title, desc, fields, colour=colour, channel_id=channel_id, footer=footer_text)
-                                                                save_state(f"{pname}_{label}", ladbrokes_match_id, LADBROKES_STATE_FILE)
+                                                        print(f"[WH] No alert - WH odds {boosted_odds} < Lay {price}")
+                                        else:
+                                            print(f"[WH] Failed to get price for {pname} {label}")
+                                            continue
+                                                
+                                    except Exception as e:
+                                        print(f"Error getting WH odds: {e}")
+                                        traceback.print_exc()
+                                        continue
+
+                                # Also attempt Ladbrokes combos if configured
+                                if ENABLE_LADBROKES and 'ladbrokes_client' in locals() and ladbrokes_client and ladbrokes_match_id:
+                                    lb = get_ladbrokes_player_combos(ladbrokes_client, ladbrokes_match_id, pname)
+                                    if lb:
+                                        if mtype == betfair.FGS_MARKET_NAME:
+                                            bettype = "First Goalscorer"
+                                            label = "FGS"
+                                            odds = lb.get('fgs_combo',0)
+                                        elif mtype == betfair.AGS_MARKET_NAME:
+                                            bettype = "Anytime Goalscorer"
+                                            label = "AGS"
+                                            odds = lb.get('ags_combo',0)
+                                        else:
+                                            continue
+                                        #print(f"  [LADBROKES] {pname} - AGS(combo): {lb.get('ags_combo')} | FGS+AGS(combo): {lb.get('fgs_combo')}")
+                                        betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
+                                        if already_alerted(pname, ladbrokes_match_id, LADBROKES_STATE_FILE, market=label):
+                                            continue
+                                        
+                                        # Get minimum threshold across all Ladbrokes destinations
+                                        min_threshold = get_min_threshold('ladbrokes', ALERT_CONFIG)
+                                        if ALERT_CONFIG and 'ladbrokes_coral' in ALERT_CONFIG:
+                                            min_threshold = min(min_threshold, get_min_threshold('ladbrokes_coral', ALERT_CONFIG))
+                                        if ALERT_CONFIG and 'ladbrokes_betget' in ALERT_CONFIG:
+                                            min_threshold = min(min_threshold, get_min_threshold('ladbrokes_betget', ALERT_CONFIG))
+                                        
+                                        # Calculate rating early for threshold check
+                                        try:
+                                            rating = round(odds / price * 100, 2) if price > 0 else 0
+                                        except Exception:
+                                            rating = 0
+                                        
+                                        # Skip if doesn't meet minimum threshold
+                                        if rating < min_threshold:
+                                            continue
+                                        
+                                        # Check if match is in offer id 7 (Coral refund) or offer id 9 (Ladbrokes refund)
+                                        offer_id = None  # None = regular arb, 7 = Coral refund, 9 = Ladbrokes refund
+                                        try:
+                                            # Check offer 7 (Coral)
+                                            api = f"https://api.oddsmatcha.uk/offers/7"
+                                            resp = requests.get(api, timeout=10)
+                                            if resp.ok:
+                                                data = resp.json()
+                                                matches = data.get('matches', [])
+                                                for match in matches:
+                                                    match_mappings = match.get('mappings', [])
+                                                    for mapping in match_mappings:
+                                                        if (mapping.get('site_name') == 'ladbrokes' and 
+                                                            mapping.get('site_match_id') == ladbrokes_match_id):
+                                                            offer_id = 7
+                                                            break
+                                                    if offer_id:
+                                                        break
+                                            
+                                            # Check offer 9 (Ladbrokes) if not in offer 7
+                                            if not offer_id:
+                                                api = f"https://api.oddsmatcha.uk/offers/9"
+                                                resp = requests.get(api, timeout=10)
+                                                if resp.ok:
+                                                    data = resp.json()
+                                                    matches = data.get('matches', [])
+                                                    for match in matches:
+                                                        match_mappings = match.get('mappings', [])
+                                                        for mapping in match_mappings:
+                                                            if (mapping.get('site_name') == 'ladbrokes' and 
+                                                                mapping.get('site_match_id') == ladbrokes_match_id):
+                                                                offer_id = 9
+                                                                break
+                                                        if offer_id:
+                                                            break
+                                            
+                                            if offer_id:
+                                                print(f"    [LADBROKES] Match {ladbrokes_match_id} is in Offer ID {offer_id}")
+                                            else:
+                                                print(f"    [LADBROKES] Match {ladbrokes_match_id} is NOT in any refund offer")
+                                        except Exception as e:
+                                            print(f"    [LADBROKES] Error checking offers: {e}")
+                                            traceback.print_exc()
+                                        
+                                        # Check lineup requirements
+                                        if not confirmed_starters:
+                                            print(f"[LAD] Would send alert for {pname} ({label}) - but no lineup data available. (Ladbrokes Odds: {odds} vs Lay Odds: {price}, Rating: {rating}%)")
+                                            continue
+                                        if not is_confirmed_starter(pname, confirmed_starters):
+                                            print(f"[LAD] Would send alert for {pname} ({label}) - but not in confirmed starters. (Ladbrokes Odds: {odds} vs Lay Odds: {price}, Rating: {rating}%)")
+                                            continue
+                                        
+                                        # Build alert content
+                                        print(f"[LAD] Comparison: {pname} {label} - Ladbrokes Odds: {odds} vs Lay Odds: {price} ({rating}%)")
+                                        
+                                        extra_note = ""
+                                        if offer_id == 7:
+                                            extra_note = f"\n\n**Coral Refund Offer active (Bet Builder B10G10)**"
+                                        elif offer_id == 9:
+                                            extra_note = f"\n\n**Ladbrokes Refund Offer active (Bet Builder B10G10)**"
+                                        
+                                        title = f"{pname} - {label} - {odds}/{price} ({rating}%)"
+                                        desc = f"**{mname}** ({ko_str})\n{cname}\nConfirmed Starter ✅\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid}){extra_note}"
+                                        fields = [("Confirmed Starter", "✅")]
+                                        if label == "FGS":
+                                            footer_text = f"{pname} FGS + AGS"
+                                        elif label == "AGS":
+                                            footer_text = f"{pname} AGS + Over 0.5 Goals"
+                                        else:
+                                            footer_text = None
+                                        
+                                        # Determine which alert type(s) to use
+                                        sent_count = 0
+                                        
+                                        # Send to appropriate destinations based on rating and offer_id
+                                        if rating >= 100:
+                                            # True arb - send to main Ladbrokes channel
+                                            sent = send_alert_to_destinations(
+                                                'ladbrokes',
+                                                title=title,
+                                                description=desc,
+                                                fields=fields,
+                                                footer=footer_text,
+                                                rating=rating,
+                                                offer_id=None  # True arbs don't filter by offer
+                                            )
+                                            sent_count += sent
+                                        else:
+                                            # Sub-arb - send to offer-specific channels
+                                            if offer_id == 7:
+                                                sent = send_alert_to_destinations(
+                                                    'ladbrokes_coral',
+                                                    title=title,
+                                                    description=desc,
+                                                    fields=fields,
+                                                    footer=footer_text,
+                                                    rating=rating,
+                                                    offer_id=7
+                                                )
+                                                sent_count += sent
+                                            elif offer_id == 9:
+                                                sent = send_alert_to_destinations(
+                                                    'ladbrokes_betget',
+                                                    title=title,
+                                                    description=desc,
+                                                    fields=fields,
+                                                    footer=footer_text,
+                                                    rating=rating,
+                                                    offer_id=9
+                                                )
+                                                sent_count += sent
+                                        
+                                        # Save state if any alert was sent
+                                        if sent_count > 0:
+                                            save_state(f"{pname}_{label}", ladbrokes_match_id, LADBROKES_STATE_FILE)
                             
                             # Process TOM (Two or More Goals) market from exchanges only
                             if wh_client and exchange_odds.get('Two or More Goals'):
@@ -2829,12 +3167,32 @@ def main():
                                     except Exception as e:
                                         print(f"[HAT] Error processing {player_name}: {e}")
                                         continue
-
+            
+            except Exception as e:
+                print(f"  [ERROR] Failed to process match {betfair_id}: {e}")
+                traceback.print_exc()
+                continue
 
         loop_time = time.time() - loop_start
-        print(f"[TIMING] Loop completed in {loop_time:.2f}s - {total_matches_checked} matches, {total_players_processed} players")
-        print(f"Sleeping for {POLL_SECONDS}s...")
-        time.sleep(POLL_SECONDS)
+        print(f"\n[TIMING] Loop completed in {loop_time:.2f}s - {total_matches_checked} matches, {total_players_processed} players")
+        
+        # Check if there are any more matches to monitor today
+        upcoming_count = sum(1 for m in all_matches_cache if m.get('minutes_until', -999) > -90)
+        
+        if upcoming_count == 0:
+            print("\n[INFO] All matches have finished")
+            print("[WAIT] Waiting until midnight for tomorrow's matches...")
+            # Clear cache so we fetch fresh matches tomorrow
+            all_matches_cache = None
+            # Sleep until next day
+            tomorrow = datetime.now(london).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            sleep_seconds = (tomorrow - datetime.now(london)).total_seconds()
+            print(f"[WAIT] Sleeping for {sleep_seconds/3600:.1f} hours until {tomorrow.strftime('%Y-%m-%d %H:%M')}")
+            time.sleep(sleep_seconds)
+        else:
+            print(f"[INFO] {upcoming_count} matches still upcoming today")
+            print(f"[WAIT] Sleeping for {POLL_SECONDS}s...")
+            time.sleep(POLL_SECONDS)
 
 if __name__ == "__main__":
     main()

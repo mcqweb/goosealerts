@@ -325,6 +325,77 @@ class Betfair():
     def get_kickoff_time(self, match_data: Dict) -> str:
         return match_data.get('openDate')
 
+    def fetch_single_match(self, match_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single match by ID with its market nodes.
+        
+        Args:
+            match_id: Betfair match/event ID
+        
+        Returns:
+            Dict with match details and market_nodes, or None if not found
+        """
+        markets_url = f"{self.api_url}byevent"
+        markets_params = {
+            "currencyCode": "GBP",
+            "eventIds": str(match_id),
+            "locale": "en_GB",
+            "rollupLimit": 10,
+            "rollupModel": "STAKE",
+            "types": "MARKET_STATE,EVENT,MARKET_DESCRIPTION"
+        }
+
+        try:
+            r = requests.get(markets_url, headers=self.headers, params=markets_params, proxies=self.proxies, timeout=15)
+            r.raise_for_status()
+            markets_data = r.json()
+            
+            if getattr(self, 'debug_save', False):
+                try:
+                    self._maybe_save_debug(f"markets_event_{match_id}", markets_data)
+                except Exception:
+                    pass
+
+            # cache raw response
+            cache_dir = os.path.join(os.path.dirname(__file__), "..", "cache")
+            os.makedirs(cache_dir, exist_ok=True)
+            cached_file = os.path.join(cache_dir, f"betfair_markets_{match_id}.json")
+            with open(cached_file, 'w', encoding='utf-8') as f:
+                json.dump(markets_data, f, indent=2, ensure_ascii=False)
+            
+            # Extract market nodes for goalscorer markets
+            market_nodes = []
+            for event_type in markets_data.get('eventTypes', []):
+                for event_node in event_type.get('eventNodes', []):
+                    for market in event_node.get('marketNodes', []):
+                        desc = market.get('description', {})
+                        market_type = desc.get('marketType', '')
+                        if market_type in (self.AGS_MARKET_NAME, self.FGS_MARKET_NAME):
+                            market_nodes.append(market)
+            
+            if not market_nodes:
+                return None
+            
+            # Extract basic match info
+            event_info = {}
+            for event_type in markets_data.get('eventTypes', []):
+                for event_node in event_type.get('eventNodes', []):
+                    event = event_node.get('event', {})
+                    if str(event.get('id')) == str(match_id):
+                        event_info = event
+                        break
+            
+            return {
+                'id': match_id,
+                'name': event_info.get('name', ''),
+                'openDate': event_info.get('openDate', ''),
+                'competitionId': event_info.get('competitionId', ''),
+                'market_nodes': market_nodes
+            }
+            
+        except Exception as e:
+            print(f"[BETFAIR] Error fetching match {match_id}: {e}")
+            return None
+
     def fetch_odds_for_match(self, match_id: str, match: Optional[Dict] = None) -> List[Dict[str, Any]]:
         markets_url = f"{self.api_url}byevent"
         markets_params = {

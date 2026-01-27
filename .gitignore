@@ -58,3 +58,5 @@ test_required_cookies.py
 kwiff/server/event_mappings.json
 kwiff_event_details_sample.json
 current_event_sample.json
+alert_config.json
+alert_config.live.json
