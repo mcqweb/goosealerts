@@ -9,6 +9,7 @@ import sys
 import time
 import json
 import os
+import re
 from pathlib import Path
 from src.bet_builder_templates import BetBuilderTemplates, PlayerMarketChecker
 
@@ -21,51 +22,48 @@ class BetBuilderGenerator:
     """Generate bet builder combinations with selection IDs ready for pricing API"""
     
     @staticmethod
+    def _normalize_name_tokens(name: str) -> set:
+        """Normalize a name into a set of comparable tokens.
+
+        Handles WH "Last, First" ordering and strips punctuation so that
+        names like "Archibald, Theo" match "Theo Archibald".
+        """
+        if not name:
+            return set()
+
+        cleaned = str(name)
+
+        # If name is provided as "Last, First" reorder it to "First Last"
+        if "," in cleaned:
+            parts = [p.strip() for p in cleaned.split(",") if p.strip()]
+            if len(parts) >= 2:
+                cleaned = " ".join(parts[1:] + [parts[0]])
+
+        cleaned = re.sub(r"[^\w\s\-]", " ", cleaned.lower())
+        tokens = set(re.split(r"[\s\-]+", cleaned))
+        return {t for t in tokens if len(t) > 1}
+
     def _fuzzy_match_names(name1: str, name2: str) -> bool:
         """
         Check if two player names are a fuzzy match.
-        Returns True if at least 2 out of 3 name parts match.
-        
-        Examples:
-            'Junior Kroupi' vs 'Eli Junior Kroupi' -> True (2/3 match)
-            'Benjamin Sesko' vs 'Ben Sesko' -> True (1/2 match, 50%+)
-            'Jamie Gittens' vs 'Jamie Bynoe-Gittens' -> True (2/3 match after hyphen split)
-            'John Smith' vs 'Jane Doe' -> False (0/2 match)
-        
-        Args:
-            name1: First name to compare
-            name2: Second name to compare
-            
-        Returns:
-            True if names match closely enough
+        Returns True if at least 2 out of 3 name parts match or the
+        overlap ratio is at least 50% after normalization.
         """
-        import re
-        
-        # Normalize: lowercase and split on both spaces and hyphens
-        parts1 = set(re.split(r'[\s\-]+', name1.lower()))
-        parts2 = set(re.split(r'[\s\-]+', name2.lower()))
-        
-        # Remove very short parts (initials, etc.) that might cause false matches
-        parts1 = {p for p in parts1 if len(p) > 1}
-        parts2 = {p for p in parts2 if len(p) > 1}
-        
+        parts1 = BetBuilderGenerator._normalize_name_tokens(name1)
+        parts2 = BetBuilderGenerator._normalize_name_tokens(name2)
+
         if not parts1 or not parts2:
             return False
-        
-        # Count matching parts
+
         matches = len(parts1 & parts2)
-        
-        # Calculate total unique parts (union)
         total_parts = len(parts1 | parts2)
-        
+
         if total_parts == 0:
             return False
-        
-        # Need at least 2 matching parts, OR >50% match rate for shorter names
+
         if matches >= 2:
             return True
-        
-        # For shorter names (2 parts total), require at least 50% match
+
         match_rate = matches / total_parts
         return match_rate >= 0.5
     

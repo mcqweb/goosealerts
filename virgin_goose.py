@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from betfair import Betfair
 from oc import get_oddschecker_match_slug, get_oddschecker_odds
 from willhill_betbuilder import get_odds, configure, BET_TYPES
+from match_context import get_match_context
 
 try:
     from ladbrokes_alerts.client import LadbrokesAlerts
@@ -1799,12 +1800,26 @@ def fetch_lineups(oddsmatcha_match_id):
         starters = set()
         home_lineup = (data.get('home_lineup') or {}).get('line_up', [])
         away_lineup = (data.get('away_lineup') or {}).get('line_up', [])
+        
+        # Extract team names from lineup data
+        home_team = (data.get('home_lineup') or {}).get('team_name')
+        away_team = (data.get('away_lineup') or {}).get('team_name')
+        fixture = f"{home_team} v {away_team}" if home_team and away_team else None
 
-        for player in home_lineup + away_lineup:
+        for player in home_lineup:
             name = player.get('name', '').strip()
             if name:
-                # Track lineup names under 'lineup' site
-                track_player_name(name, 'lineup')
+                # Track with home team info
+                track_player_name(name, 'lineup', match_id=oddsmatcha_match_id, 
+                                team_name=home_team, fixture=fixture)
+                starters.add(name)
+        
+        for player in away_lineup:
+            name = player.get('name', '').strip()
+            if name:
+                # Track with away team info
+                track_player_name(name, 'lineup', match_id=oddsmatcha_match_id,
+                                team_name=away_team, fixture=fixture)
                 starters.add(name)
 
         if starters:
@@ -2026,13 +2041,14 @@ def fetch_exchange_odds(oddsmatcha_match_id):
         print(f"Error fetching exchange odds for match {oddsmatcha_match_id}: {e}")
         return {}
 
-def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type):
+def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type, match_data=None):
     """Combine Betfair and exchange odds for a market.
     
     Args:
         betfair_odds: List of odds dicts from Betfair with 'outcome', 'odds', 'size'
         exchange_odds: Dict from fetch_exchange_odds with player names as keys
         market_type: 'Anytime Goalscorer', 'First Goalscorer', 'Two or More Goals', or 'Hat-trick'
+        match_data: Optional dict with home_team, away_team, id for tracking
     
     Returns:
         List of combined odds entries, each with:
@@ -2046,11 +2062,16 @@ def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type):
     """
     combined = []
     
+    # Get match context for tracking
+    match_context = get_match_context(match_data) if match_data else {'team_name': None, 'fixture': None}
+    match_id = match_data.get('id') if match_data else None
+    
     # Add Betfair odds
     for odd in betfair_odds:
         player_name = odd.get('outcome', '')
         if player_name:
-            track_player_name(player_name, 'betfair')
+            track_player_name(player_name, 'betfair', match_id=match_id,
+                            fixture=match_context['fixture'])
         combined.append({
             'player_name': player_name,
             'site': 'Betfair',
@@ -2067,7 +2088,8 @@ def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type):
         for site_odd in site_odds_list:
             site_name = site_odd.get('site_name', '').lower()
             if player_name and site_name:
-                track_player_name(player_name, site_name)
+                track_player_name(player_name, site_name, match_id=match_id,
+                                fixture=match_context['fixture'])
             combined.append({
                 'player_name': player_name,
                 'site': site_odd.get('site_name'),
@@ -2391,6 +2413,10 @@ def main():
                     exchange_odds = {}
                     confirmed_starters = set()
                     
+                    # Get match context for player tracking
+                    match_context = get_match_context(match)
+                    fixture = match_context['fixture']
+                    
                     # Optionally fetch additional exchange odds for debugging/augmentation
                     if ENABLE_ADDITIONAL_EXCHANGES:
                         exchange_odds = fetch_exchange_odds(oddsmatcha_match_id)
@@ -2403,7 +2429,9 @@ def main():
                                     for odd in odds_list:
                                         site_name = odd.get('site_name', 'Unknown').lower()
                                         if player_name and site_name != 'unknown':
-                                            track_player_name(player_name, site_name)
+                                            track_player_name(player_name, site_name, 
+                                                            match_id=oddsmatcha_match_id,
+                                                            fixture=fixture)
                                         lay_odds = odd.get('lay_odds', 'N/A')
                                         liquidity = odd.get('liquidity', 'None')
                                         liquidity_str = f"£{int(liquidity)}" if liquidity else "None"
@@ -2486,7 +2514,7 @@ def main():
                             
                             # Combine Betfair and exchange odds
                             market_type = 'First Goalscorer' if mtype == betfair.FGS_MARKET_NAME else 'Anytime Goalscorer'
-                            all_odds = combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type)
+                            all_odds = combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type, match_data=match)
                             
                             # Group odds by player name to collect all exchanges for each player
                             player_odds_map = {}
@@ -2655,20 +2683,38 @@ def main():
                                     # GET WILLIAM HILL BB ODDS HERE
                                     betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
                                     try:
-                                        combos = wh_client.get_player_combinations(
-                                            player_name=pname,
-                                            template_name=bettype,
-                                            get_price=False  # Get combo first without price
-                                        )
+                                        # Try mapped/alias variants for WH matching (e.g., Dominic Ballard vs Dom Ballard)
+                                        mapped_name = get_mapped_name(pname)
+                                        aliases = []
+                                        for candidate in [pname, mapped_name]:
+                                            if candidate and candidate not in aliases:
+                                                aliases.append(candidate)
+                                            wh_format = transform_to_wh_format(candidate) if candidate else None
+                                            if wh_format and wh_format not in aliases:
+                                                aliases.append(wh_format)
+
+                                        combos = None
+                                        used_alias = None
+                                        for alias in aliases:
+                                            print(f"[WH] Attempting WH combos for alias '{alias}' ({label})")
+                                            attempt = wh_client.get_player_combinations(
+                                                player_name=alias,
+                                                template_name=bettype,
+                                                get_price=False  # Get combo first without price
+                                            )
+                                            if attempt:
+                                                combos = attempt
+                                                used_alias = alias
+                                                break
                                         
                                         if not combos:
-                                            print(f"[WH] No combos found for {pname} {label}")
+                                            print(f"[WH] No combos found for {pname} {label} using aliases {aliases}")
                                             continue
                                         
                                         combo = combos[0]
                                         if not combo.get('success'):
                                             error_msg = combo.get('error', 'Unknown error')
-                                            print(f"[WH] Combo unsuccessful for {pname} {label}: {error_msg}")
+                                            print(f"[WH] Combo unsuccessful for {pname} {label} (alias '{used_alias}'): {error_msg}")
                                             continue
                                         
                                         # Determine if we should fetch price based on mode

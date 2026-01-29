@@ -82,6 +82,31 @@ def load_existing_mappings() -> dict:
         return json.load(f)
 
 
+def load_skipped_pairs() -> Set[Tuple[str, str]]:
+    """Load previously skipped player name pairs."""
+    skipped_file = Path("data/skipped_player_pairs.json")
+    if not skipped_file.exists():
+        return set()
+    
+    with open(skipped_file) as f:
+        skipped_list = json.load(f)
+    
+    # Convert list of pairs back to set of tuples
+    return {tuple(sorted([p[0].lower(), p[1].lower()])) for p in skipped_list}
+
+
+def save_skipped_pairs(skipped_pairs: Set[Tuple[str, str]]) -> None:
+    """Save skipped pairs to file."""
+    skipped_file = Path("data/skipped_player_pairs.json")
+    skipped_file.parent.mkdir(exist_ok=True)
+    
+    # Convert set of tuples to list for JSON serialization
+    skipped_list = [list(pair) for pair in skipped_pairs]
+    
+    with open(skipped_file, 'w') as f:
+        json.dump(skipped_list, f, indent=2)
+
+
 def find_potential_duplicates(players: dict, score_threshold: float = 0.75) -> List[Tuple[str, str, float, List[str]]]:
     """
     Find potential duplicate/variant player names.
@@ -191,6 +216,10 @@ def main():
     existing_mappings_count = len(mappings) - 1  # Exclude __alias__
     print(f"Loaded {existing_mappings_count} existing mappings")
     
+    skipped_pairs = load_skipped_pairs()
+    if skipped_pairs:
+        print(f"Loaded {len(skipped_pairs)} previously skipped pairs")
+    
     print("\nSearching for potential duplicates...")
     duplicates = find_potential_duplicates(players, score_threshold=0.75)
     
@@ -204,9 +233,16 @@ def main():
     skipped_count = 0
     
     for idx, (name1, name2, score, matching) in enumerate(duplicates, 1):
+        # Normalize pair key
+        pair_key = tuple(sorted([name1.lower(), name2.lower()]))
+        
         # Check if either name is already a source in an existing mapping
         if name1.lower() in mappings or name2.lower() in mappings:
             print(f"\n[{idx}/{len(duplicates)}] Skipping (already mapped)")
+            continue
+        
+        # Check if this pair was previously skipped
+        if pair_key in skipped_pairs:
             continue
         
         approved, preferred = prompt_for_approval(name1, name2, score, matching, players)
@@ -220,6 +256,7 @@ def main():
             add_mapping(mappings, variant, preferred)
             approved_count += 1
         else:
+            skipped_pairs.add(pair_key)
             skipped_count += 1
         
         if idx < len(duplicates):
@@ -228,6 +265,12 @@ def main():
     # Save if any changes were made
     if approved_count > 0:
         save_mappings(mappings)
+    
+    if skipped_count > 0:
+        save_skipped_pairs(skipped_pairs)
+        print(f"\n✓ Saved {skipped_count} skipped pairs")
+    
+    if approved_count > 0 or skipped_count > 0:
         print(f"\nSummary: {approved_count} mappings added, {skipped_count} skipped")
     else:
         print(f"\nNo mappings were added.")

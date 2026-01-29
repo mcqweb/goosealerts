@@ -8,31 +8,44 @@ from dataclasses import dataclass
 import re
 
 
+def _normalize_name_tokens(name: str) -> set:
+    """Normalize a name into a set of comparable tokens.
+
+    Reorders "Last, First" strings and strips punctuation so WH player
+    names like "Archibald, Theo" match "Theo Archibald".
+    """
+    if not name:
+        return set()
+
+    cleaned = str(name)
+
+    if "," in cleaned:
+        parts = [p.strip() for p in cleaned.split(",") if p.strip()]
+        if len(parts) >= 2:
+            cleaned = " ".join(parts[1:] + [parts[0]])
+
+    cleaned = re.sub(r"[^\w\s\-]", " ", cleaned.lower())
+    tokens = set(re.split(r"[\s\-]+", cleaned))
+    return {t for t in tokens if len(t) > 1}
+
+
 def _fuzzy_match_names(name1: str, name2: str) -> bool:
     """
-    Check if two player names are a fuzzy match.
-    Returns True if at least 2 out of 3 name parts match.
-    Splits on both spaces and hyphens.
+    Check if two player names are a fuzzy match after normalization.
+    Returns True if at least 2 matching parts or a 50%+ overlap exists.
     """
-    # Normalize: lowercase and split on both spaces and hyphens
-    parts1 = set(re.split(r'[\s\-]+', name1.lower()))
-    parts2 = set(re.split(r'[\s\-]+', name2.lower()))
-    
-    # Remove very short parts (initials, etc.)
-    parts1 = {p for p in parts1 if len(p) > 1}
-    parts2 = {p for p in parts2 if len(p) > 1}
+    parts1 = _normalize_name_tokens(name1)
+    parts2 = _normalize_name_tokens(name2)
     
     if not parts1 or not parts2:
         return False
     
-    # Count matching parts
     matches = len(parts1 & parts2)
     total_parts = len(parts1 | parts2)
     
     if total_parts == 0:
         return False
     
-    # Need at least 2 matching parts, OR >50% match rate
     if matches >= 2:
         return True
     
