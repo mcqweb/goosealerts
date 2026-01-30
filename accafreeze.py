@@ -387,7 +387,7 @@ def send_discord_alert(opportunity, sites, is_realert=False):
     # Build embed
     title_prefix = "🔄 " if is_realert else ""
     embed = {
-        "title": f"{title_prefix}{opportunity['outcome']} ({opportunity['rating']:.2f}%)",
+        "title": f"{title_prefix}{opportunity['outcome']} ({opportunity['rating']:.0f}%)",
         "description": f"**{opportunity['home_team']} v {opportunity['away_team']}**\n{opportunity['competition']}\n{opportunity['kickoff_display']}",
         "color": 0xFFFFFF,  # White
         "fields": [
