@@ -3,6 +3,7 @@ import re
 import requests
 import os
 import time
+import traceback
 try:
     import tls_client
 except ImportError:
@@ -107,6 +108,80 @@ BOOKMAKER_MAPPING = {
 # ========= SLUG CACHE =========
 # In-memory cache for Betfair ID -> OddsChecker slug mappings
 _SLUG_CACHE = {}
+
+def prefetch_oddschecker_slugs(betfair_ids):
+    """
+    Batch prefetch oddschecker slugs for multiple Betfair IDs.
+    This is more efficient than individual API calls per match.
+    
+    Args:
+        betfair_ids: List of Betfair match IDs (strings or ints)
+    
+    Returns:
+        Dict mapping Betfair ID -> slug (only successful conversions)
+    """
+    if not betfair_ids:
+        return {}
+    
+    # Filter out IDs already in cache
+    uncached_ids = [str(bid) for bid in betfair_ids if str(bid) not in _SLUG_CACHE]
+    
+    if not uncached_ids:
+        _debug(f"[INFO] All {len(betfair_ids)} Betfair IDs already cached")
+        return _SLUG_CACHE
+    
+    # Batch API call (API supports comma-separated IDs)
+    betfair_ids_str = ','.join(uncached_ids)
+    api_url = f'https://api.oddsmatcha.uk/convert/betfair_to_oddschecker?betfair_ids={betfair_ids_str}'
+    
+    try:
+        _debug(f"[INFO] Prefetching oddschecker slugs for {len(uncached_ids)} Betfair IDs...")
+        response = requests.get(api_url, timeout=30)
+        
+        # Log the response for debugging
+        print(f"[OC] API Response Status: {response.status_code}")
+        if response.status_code != 200:
+            print(f"[WARN] Batch oddschecker prefetch API returned status {response.status_code}")
+            print(f"[DEBUG] Response content: {response.text[:500]}")  # First 500 chars
+            return _SLUG_CACHE
+        
+        response_data = response.json()
+        print(f"[DEBUG] API Response keys: {list(response_data.keys())}")
+        print(f"[DEBUG] Success field: {response_data.get('success')}")
+        print(f"[DEBUG] Conversions type: {type(response_data.get('conversions'))}")
+        
+        if response_data.get('success') and isinstance(response_data.get('conversions'), list):
+            conversions = response_data['conversions']
+            print(f"[DEBUG] Number of conversions returned: {len(conversions)}")
+            if conversions:
+                print(f"[DEBUG] Sample conversion: {conversions[0]}")
+            
+            success_count = 0
+            for conv in conversions:
+                betfair_id = str(conv.get('betfair_id', ''))
+                page_slug = conv.get('page_slug')
+                if betfair_id and page_slug:
+                    _SLUG_CACHE[betfair_id] = page_slug
+                    success_count += 1
+                else:
+                    print(f"[DEBUG] Missing data in conversion: betfair_id={betfair_id}, page_slug={page_slug}")
+            
+            print(f"[OC] Prefetched {success_count}/{len(uncached_ids)} oddschecker slugs")
+            if success_count < len(uncached_ids):
+                failed_count = len(uncached_ids) - success_count
+                print(f"[OC] {failed_count} Betfair IDs could not be converted to oddschecker slugs")
+        else:
+            print(f"[WARN] Batch oddschecker prefetch API returned unsuccessful response")
+            print(f"[DEBUG] Full response: {json.dumps(response_data, indent=2)[:1000]}")  # First 1000 chars
+    
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] Failed to parse JSON response from oddschecker API: {e}")
+        print(f"[DEBUG] Response text: {response.text[:500]}")
+    except Exception as e:
+        print(f"[ERROR] Failed to prefetch oddschecker slugs: {e}")
+        traceback.print_exc()
+    
+    return _SLUG_CACHE
 
 def _ensure_cache_dirs():
     """Create cache directories if they don't exist."""

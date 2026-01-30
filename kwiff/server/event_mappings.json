@@ -2981,72 +2981,106 @@
       "description": "FC Barcelona vs FC Copenhagen - {'id': 1, 'name': 'UEFA Champions League', 'competitionId': 134822} - 2026-01-28T20:00:00.000Z"
     },
     "11445458": {
-      "betfair_id": "TODO",
-      "description": "Celtic Glasgow vs FC Utrecht - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155473",
+      "description": "Celtic Glasgow vs FC Utrecht - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4113",
+      "smarkets_id": "44821455"
     },
     "11445443": {
-      "betfair_id": "TODO",
-      "description": "VfB Stuttgart vs Young Boys Bern - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155417",
+      "description": "VfB Stuttgart vs Young Boys Bern - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4129",
+      "smarkets_id": "44821411"
     },
     "11445445": {
-      "betfair_id": "TODO",
-      "description": "Fotbal Club FCSB vs Fenerbahce Istanbul - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35160776",
+      "description": "Fotbal Club FCSB vs Fenerbahce Istanbul - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4116",
+      "smarkets_id": "44824813"
     },
     "11445446": {
-      "betfair_id": "TODO",
-      "description": "FC Porto vs Glasgow Rangers - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155435",
+      "description": "FC Porto vs Glasgow Rangers - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4118",
+      "smarkets_id": "44821439"
     },
     "11445449": {
-      "betfair_id": "TODO",
-      "description": "FK Crvena Zvezda Belgrade vs RC Celta de Vigo - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155474",
+      "description": "FK Crvena Zvezda Belgrade vs RC Celta de Vigo - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4114",
+      "smarkets_id": "44821457"
     },
     "11445453": {
-      "betfair_id": "TODO",
-      "description": "Real Betis vs Feyenoord Rotterdam - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155440",
+      "description": "Real Betis vs Feyenoord Rotterdam - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4127",
+      "smarkets_id": "44821441"
     },
     "11445454": {
-      "betfair_id": "TODO",
-      "description": "KRC Genk vs Malmo FF - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155434",
+      "description": "KRC Genk vs Malmo FF - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4126",
+      "smarkets_id": "44821438"
     },
     "11445455": {
-      "betfair_id": "TODO",
-      "description": "FC Basel 1893 vs FC Viktoria Plzen - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155390",
+      "description": "FC Basel 1893 vs FC Viktoria Plzen - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4115",
+      "smarkets_id": "44821401"
     },
     "11445456": {
-      "betfair_id": "TODO",
-      "description": "Go Ahead Eagles vs SC Braga - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155433",
+      "description": "Go Ahead Eagles vs SC Braga - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4119",
+      "smarkets_id": "44821437"
     },
     "11445442": {
-      "betfair_id": "TODO",
-      "description": "Aston Villa vs FC Salzburg - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35159383",
+      "description": "Aston Villa vs FC Salzburg - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4112",
+      "smarkets_id": "44824167"
     },
     "11445467": {
-      "betfair_id": "TODO",
-      "description": "Olympique Lyon vs PAOK Thessaloniki - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155472",
+      "description": "Olympique Lyon vs PAOK Thessaloniki - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4124",
+      "smarkets_id": "44821454"
     },
     "11596062": {
-      "betfair_id": "TODO",
-      "description": "Panathinaikos Athens vs AS Roma - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35180525",
+      "description": "Panathinaikos Athens vs AS Roma - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4125",
+      "smarkets_id": "44838504"
     },
     "11445394": {
-      "betfair_id": "TODO",
-      "description": "PFC Ludogorets 1945 Razgrad vs OGC Nice - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155477",
+      "description": "PFC Ludogorets 1945 Razgrad vs OGC Nice - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4121",
+      "smarkets_id": "44821458"
     },
     "11445423": {
-      "betfair_id": "TODO",
-      "description": "Nottingham Forest vs Ferencvarosi Budapest - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155412",
+      "description": "Nottingham Forest vs Ferencvarosi Budapest - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4123",
+      "smarkets_id": "44821407"
     },
     "11445424": {
-      "betfair_id": "TODO",
-      "description": "FC Midtjylland vs GNK Dinamo Zagreb - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155436",
+      "description": "FC Midtjylland vs GNK Dinamo Zagreb - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4117",
+      "smarkets_id": "44821440"
     },
     "11445425": {
-      "betfair_id": "TODO",
-      "description": "Lille OSC vs SC Freiburg - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155427",
+      "description": "Lille OSC vs SC Freiburg - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4120",
+      "smarkets_id": "44821429"
     },
     "11445440": {
-      "betfair_id": "TODO",
-      "description": "SK Sturm Graz vs SK Brann - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z"
+      "betfair_id": "35155405",
+      "description": "SK Sturm Graz vs SK Brann - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4128",
+      "smarkets_id": "44821404"
     },
     "11618193": {
       "betfair_id": "TODO",
@@ -3069,24 +3103,34 @@
       "description": "NAC Breda vs FC Twente Enschede - {'id': 1, 'name': 'Eredivisie', 'competitionId': 128569} - 2026-01-30T19:00:00.000Z"
     },
     "11511740": {
-      "betfair_id": "TODO",
-      "description": "1. FC Cologne vs VfL Wolfsburg - {'id': 1, 'name': 'Bundesliga', 'competitionId': 127540} - 2026-01-30T19:30:00.000Z"
+      "betfair_id": "35167083",
+      "description": "1. FC Cologne vs VfL Wolfsburg - {'id': 1, 'name': 'Bundesliga', 'competitionId': 127540} - 2026-01-30T19:30:00.000Z",
+      "oddsmatcha_id": "4061",
+      "smarkets_id": "44828372"
     },
     "11498636": {
-      "betfair_id": "TODO",
-      "description": "Lazio vs Genoa CFC - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-01-30T19:45:00.000Z"
+      "betfair_id": "35164713",
+      "description": "Lazio vs Genoa CFC - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-01-30T19:45:00.000Z",
+      "oddsmatcha_id": "4039",
+      "smarkets_id": "44826971"
     },
     "11506284": {
-      "betfair_id": "TODO",
-      "description": "RC Lens vs Le Havre AC - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-01-30T19:45:00.000Z"
+      "betfair_id": "35165859",
+      "description": "RC Lens vs Le Havre AC - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-01-30T19:45:00.000Z",
+      "oddsmatcha_id": "4070",
+      "smarkets_id": "44827847"
     },
     "11505715": {
-      "betfair_id": "TODO",
-      "description": "Espanyol vs Deportivo Alaves - {'id': 1, 'name': 'LaLiga', 'competitionId': 128102} - 2026-01-30T20:00:00.000Z"
+      "betfair_id": "35165750",
+      "description": "Espanyol vs Deportivo Alaves - {'id': 1, 'name': 'LaLiga', 'competitionId': 128102} - 2026-01-30T20:00:00.000Z",
+      "oddsmatcha_id": "4049",
+      "smarkets_id": "44827711"
     },
     "11607579": {
-      "betfair_id": "TODO",
-      "description": "Bristol City vs Derby County - {'id': 1, 'name': 'Championship', 'competitionId': 127297} - 2026-01-30T20:00:00.000Z"
+      "betfair_id": "35182352",
+      "description": "Bristol City vs Derby County - {'id': 1, 'name': 'Championship', 'competitionId': 127297} - 2026-01-30T20:00:00.000Z",
+      "oddsmatcha_id": "4132",
+      "smarkets_id": "44839979"
     },
     "11635650": {
       "betfair_id": "TODO",
@@ -3253,16 +3297,20 @@
       "description": "Real Madrid vs Rayo Vallecano - {'id': 1, 'name': 'LaLiga', 'competitionId': 128102} - 2026-02-01T13:00:00.000Z"
     },
     "11508788": {
-      "betfair_id": "TODO",
-      "description": "PSV Eindhoven vs Feyenoord Rotterdam - {'id': 1, 'name': 'Eredivisie', 'competitionId': 128569} - 2026-02-01T13:30:00.000Z"
+      "betfair_id": "35155440",
+      "description": "PSV Eindhoven vs Feyenoord Rotterdam - {'id': 1, 'name': 'Eredivisie', 'competitionId': 128569} - 2026-02-01T13:30:00.000Z",
+      "oddsmatcha_id": "4127",
+      "smarkets_id": "44821441"
     },
     "11508709": {
       "betfair_id": "TODO",
       "description": "Heracles Almelo vs Fortuna Sittard - {'id': 1, 'name': 'Eredivisie', 'competitionId': 128569} - 2026-02-01T13:30:00.000Z"
     },
     "11506286": {
-      "betfair_id": "TODO",
-      "description": "Olympique Lyon vs Lille OSC - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-01T14:00:00.000Z"
+      "betfair_id": "35155427",
+      "description": "Olympique Lyon vs Lille OSC - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-01T14:00:00.000Z",
+      "oddsmatcha_id": "4120",
+      "smarkets_id": "44821429"
     },
     "11505825": {
       "betfair_id": "TODO",
@@ -3273,24 +3321,32 @@
       "description": "Genclerbirligi SK vs Gaziantep FK - {'id': 1, 'name': 'Turkiye Super Lig', 'competitionId': 128749} - 2026-02-01T14:00:00.000Z"
     },
     "11511776": {
-      "betfair_id": "TODO",
-      "description": "VfB Stuttgart vs SC Freiburg - {'id': 1, 'name': 'Bundesliga', 'competitionId': 127540} - 2026-02-01T14:30:00.000Z"
+      "betfair_id": "35155427",
+      "description": "VfB Stuttgart vs SC Freiburg - {'id': 1, 'name': 'Bundesliga', 'competitionId': 127540} - 2026-02-01T14:30:00.000Z",
+      "oddsmatcha_id": "4120",
+      "smarkets_id": "44821429"
     },
     "11505718": {
-      "betfair_id": "TODO",
-      "description": "Real Betis vs Valencia CF - {'id': 1, 'name': 'LaLiga', 'competitionId': 128102} - 2026-02-01T15:15:00.000Z"
+      "betfair_id": "35155440",
+      "description": "Real Betis vs Valencia CF - {'id': 1, 'name': 'LaLiga', 'competitionId': 128102} - 2026-02-01T15:15:00.000Z",
+      "oddsmatcha_id": "4127",
+      "smarkets_id": "44821441"
     },
     "11657213": {
       "betfair_id": "TODO",
       "description": "Gil Vicente Barcelos vs FC Famalicao - {'id': 1, 'name': 'Liga Portugal', 'competitionId': 131180} - 2026-02-01T15:30:00.000Z"
     },
     "11508761": {
-      "betfair_id": "TODO",
-      "description": "SC Heerenveen vs FC Utrecht - {'id': 1, 'name': 'Eredivisie', 'competitionId': 128569} - 2026-02-01T15:45:00.000Z"
+      "betfair_id": "35155473",
+      "description": "SC Heerenveen vs FC Utrecht - {'id': 1, 'name': 'Eredivisie', 'competitionId': 128569} - 2026-02-01T15:45:00.000Z",
+      "oddsmatcha_id": "4113",
+      "smarkets_id": "44821455"
     },
     "11506283": {
-      "betfair_id": "TODO",
-      "description": "OGC Nice vs Stade Brest 29 - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-01T16:15:00.000Z"
+      "betfair_id": "35155477",
+      "description": "OGC Nice vs Stade Brest 29 - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-01T16:15:00.000Z",
+      "oddsmatcha_id": "4121",
+      "smarkets_id": "44821458"
     },
     "11506281": {
       "betfair_id": "TODO",
@@ -3317,8 +3373,10 @@
       "description": "Sporting CP vs Nacional da Madeira - {'id': 1, 'name': 'Liga Portugal', 'competitionId': 131180} - 2026-02-01T18:00:00.000Z"
     },
     "11508770": {
-      "betfair_id": "TODO",
-      "description": "FC Volendam vs Go Ahead Eagles - {'id': 1, 'name': 'Eredivisie', 'competitionId': 128569} - 2026-02-01T19:00:00.000Z"
+      "betfair_id": "35155433",
+      "description": "FC Volendam vs Go Ahead Eagles - {'id': 1, 'name': 'Eredivisie', 'competitionId': 128569} - 2026-02-01T19:00:00.000Z",
+      "oddsmatcha_id": "4119",
+      "smarkets_id": "44821437"
     },
     "11505822": {
       "betfair_id": "TODO",
@@ -3337,52 +3395,66 @@
       "description": "CD Tondela vs SL Benfica - {'id': 1, 'name': 'Liga Portugal', 'competitionId': 131180} - 2026-02-01T20:30:00.000Z"
     },
     "11666778": {
-      "betfair_id": "TODO",
-      "description": "Kocaelispor vs Fenerbahce Istanbul - {'id': 1, 'name': 'Turkiye Super Lig', 'competitionId': 128749} - 2026-02-02T17:00:00.000Z"
+      "betfair_id": "35160776",
+      "description": "Kocaelispor vs Fenerbahce Istanbul - {'id': 1, 'name': 'Turkiye Super Lig', 'competitionId': 128749} - 2026-02-02T17:00:00.000Z",
+      "oddsmatcha_id": "4116",
+      "smarkets_id": "44824813"
     },
     "11505695": {
       "betfair_id": "TODO",
       "description": "RCD Mallorca vs Sevilla FC - {'id': 1, 'name': 'LaLiga', 'competitionId': 128102} - 2026-02-02T20:00:00.000Z"
     },
     "11513320": {
-      "betfair_id": "TODO",
-      "description": "Bologna FC vs AC Milan - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-03T19:45:00.000Z"
+      "betfair_id": "35180678",
+      "description": "Bologna FC vs AC Milan - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-03T19:45:00.000Z",
+      "oddsmatcha_id": "4122",
+      "smarkets_id": "44838503"
     },
     "11652822": {
       "betfair_id": "TODO",
       "description": "Union Berlin vs Eintracht Frankfurt - {'id': 1, 'name': 'Bundesliga', 'competitionId': 127540} - 2026-02-06T19:30:00.000Z"
     },
     "11647514": {
-      "betfair_id": "TODO",
-      "description": "FC Metz vs Lille OSC - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-06T19:45:00.000Z"
+      "betfair_id": "35155427",
+      "description": "FC Metz vs Lille OSC - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-06T19:45:00.000Z",
+      "oddsmatcha_id": "4120",
+      "smarkets_id": "44821429"
     },
     "11631874": {
-      "betfair_id": "TODO",
-      "description": "Leeds United vs Nottingham Forest - {'id': 1, 'name': 'Premier League', 'competitionId': 126298} - 2026-02-06T20:00:00.000Z"
+      "betfair_id": "35155412",
+      "description": "Leeds United vs Nottingham Forest - {'id': 1, 'name': 'Premier League', 'competitionId': 126298} - 2026-02-06T20:00:00.000Z",
+      "oddsmatcha_id": "4123",
+      "smarkets_id": "44821407"
     },
     "11631882": {
       "betfair_id": "TODO",
       "description": "Manchester United vs Tottenham Hotspur - {'id': 1, 'name': 'Premier League', 'competitionId': 126298} - 2026-02-07T12:30:00.000Z"
     },
     "11652807": {
-      "betfair_id": "TODO",
-      "description": "VfL Wolfsburg vs Borussia Dortmund - {'id': 1, 'name': 'Bundesliga', 'competitionId': 127540} - 2026-02-07T14:30:00.000Z"
+      "betfair_id": "35167083",
+      "description": "VfL Wolfsburg vs Borussia Dortmund - {'id': 1, 'name': 'Bundesliga', 'competitionId': 127540} - 2026-02-07T14:30:00.000Z",
+      "oddsmatcha_id": "4061",
+      "smarkets_id": "44828372"
     },
     "11652823": {
       "betfair_id": "TODO",
       "description": "FSV Mainz vs FC Augsburg - {'id': 1, 'name': 'Bundesliga', 'competitionId': 127540} - 2026-02-07T14:30:00.000Z"
     },
     "11652818": {
-      "betfair_id": "TODO",
-      "description": "FC St. Pauli vs VfB Stuttgart - {'id': 1, 'name': 'Bundesliga', 'competitionId': 127540} - 2026-02-07T14:30:00.000Z"
+      "betfair_id": "35155417",
+      "description": "FC St. Pauli vs VfB Stuttgart - {'id': 1, 'name': 'Bundesliga', 'competitionId': 127540} - 2026-02-07T14:30:00.000Z",
+      "oddsmatcha_id": "4129",
+      "smarkets_id": "44821411"
     },
     "11652815": {
       "betfair_id": "TODO",
       "description": "1. FC Heidenheim vs Hamburger SV - {'id': 1, 'name': 'Bundesliga', 'competitionId': 127540} - 2026-02-07T14:30:00.000Z"
     },
     "11631911": {
-      "betfair_id": "TODO",
-      "description": "AFC Bournemouth vs Aston Villa - {'id': 1, 'name': 'Premier League', 'competitionId': 126298} - 2026-02-07T15:00:00.000Z"
+      "betfair_id": "35159383",
+      "description": "AFC Bournemouth vs Aston Villa - {'id': 1, 'name': 'Premier League', 'competitionId': 126298} - 2026-02-07T15:00:00.000Z",
+      "oddsmatcha_id": "4112",
+      "smarkets_id": "44824167"
     },
     "11631983": {
       "betfair_id": "TODO",
@@ -3397,12 +3469,16 @@
       "description": "Wolverhampton Wanderers vs Chelsea FC - {'id': 1, 'name': 'Premier League', 'competitionId': 126298} - 2026-02-07T15:00:00.000Z"
     },
     "11647557": {
-      "betfair_id": "TODO",
-      "description": "RC Lens vs Stade Rennais FC - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-07T16:00:00.000Z"
+      "betfair_id": "35165859",
+      "description": "RC Lens vs Stade Rennais FC - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-07T16:00:00.000Z",
+      "oddsmatcha_id": "4070",
+      "smarkets_id": "44827847"
     },
     "11643614": {
-      "betfair_id": "TODO",
-      "description": "Genoa CFC vs SSC Napoli - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-07T17:00:00.000Z"
+      "betfair_id": "35164713",
+      "description": "Genoa CFC vs SSC Napoli - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-07T17:00:00.000Z",
+      "oddsmatcha_id": "4039",
+      "smarkets_id": "44826971"
     },
     "11631981": {
       "betfair_id": "TODO",
@@ -3421,20 +3497,26 @@
       "description": "ACF Fiorentina vs Torino FC - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-07T19:45:00.000Z"
     },
     "11647666": {
-      "betfair_id": "TODO",
-      "description": "FC Nantes vs Olympique Lyon - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-07T20:05:00.000Z"
+      "betfair_id": "35155472",
+      "description": "FC Nantes vs Olympique Lyon - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-07T20:05:00.000Z",
+      "oddsmatcha_id": "4124",
+      "smarkets_id": "44821454"
     },
     "11649262": {
-      "betfair_id": "TODO",
-      "description": "Bologna FC vs Parma Calcio - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-08T11:30:00.000Z"
+      "betfair_id": "35180678",
+      "description": "Bologna FC vs Parma Calcio - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-08T11:30:00.000Z",
+      "oddsmatcha_id": "4122",
+      "smarkets_id": "44838503"
     },
     "11631925": {
       "betfair_id": "TODO",
       "description": "Brighton & Hove Albion vs Crystal Palace - {'id': 1, 'name': 'Premier League', 'competitionId': 126298} - 2026-02-08T14:00:00.000Z"
     },
     "11647687": {
-      "betfair_id": "TODO",
-      "description": "OGC Nice vs AS Monaco - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-08T14:00:00.000Z"
+      "betfair_id": "35155477",
+      "description": "OGC Nice vs AS Monaco - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-08T14:00:00.000Z",
+      "oddsmatcha_id": "4121",
+      "smarkets_id": "44821458"
     },
     "11647800": {
       "betfair_id": "TODO",
@@ -3445,8 +3527,10 @@
       "description": "Angers SCO vs Toulouse FC - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-08T16:15:00.000Z"
     },
     "11647801": {
-      "betfair_id": "TODO",
-      "description": "Le Havre AC vs Strasbourg Alsace - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-08T16:15:00.000Z"
+      "betfair_id": "35165859",
+      "description": "Le Havre AC vs Strasbourg Alsace - {'id': 1, 'name': 'Ligue 1', 'competitionId': 127428} - 2026-02-08T16:15:00.000Z",
+      "oddsmatcha_id": "4070",
+      "smarkets_id": "44827847"
     },
     "11631913": {
       "betfair_id": "TODO",
@@ -3457,8 +3541,10 @@
       "description": "Sassuolo Calcio vs Inter Milano - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-08T17:00:00.000Z"
     },
     "11650013": {
-      "betfair_id": "TODO",
-      "description": "Juventus vs Lazio - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-08T19:45:00.000Z"
+      "betfair_id": "35164713",
+      "description": "Juventus vs Lazio - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-08T19:45:00.000Z",
+      "oddsmatcha_id": "4039",
+      "smarkets_id": "44826971"
     },
     "11647820": {
       "betfair_id": "TODO",
@@ -3469,8 +3555,208 @@
       "description": "Atalanta BC vs US Cremonese - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-09T17:30:00.000Z"
     },
     "11649930": {
+      "betfair_id": "35180525",
+      "description": "AS Roma vs Cagliari Calcio - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-09T19:45:00.000Z",
+      "oddsmatcha_id": "4125",
+      "smarkets_id": "44838504"
+    },
+    "11445438": {
+      "betfair_id": "35180678",
+      "description": "Maccabi Tel Aviv FC vs Bologna FC - {'id': 1, 'name': 'UEFA Europa League', 'competitionId': 135078} - 2026-01-29T20:00:00.000Z",
+      "oddsmatcha_id": "4122",
+      "smarkets_id": "44838503"
+    },
+    "11606399": {
+      "betfair_id": "35155433",
+      "description": "Red Bull Bragantino SP vs Atletico Mineiro MG - {'id': 1, 'name': 'Brasileiro Serie A', 'competitionId': 147196} - 2026-02-04T22:00:00.000Z",
+      "oddsmatcha_id": "4119",
+      "smarkets_id": "44821437"
+    },
+    "11606397": {
+      "betfair_id": "35155435",
+      "description": "Gremio FB Porto Alegrense RS vs Botafogo FR RJ - {'id': 1, 'name': 'Brasileiro Serie A', 'competitionId': 147196} - 2026-02-05T00:30:00.000Z",
+      "oddsmatcha_id": "4118",
+      "smarkets_id": "44821439"
+    },
+    "11726093": {
       "betfair_id": "TODO",
-      "description": "AS Roma vs Cagliari Calcio - {'id': 1, 'name': 'Serie A', 'competitionId': 127079} - 2026-02-09T19:45:00.000Z"
+      "description": "Johor Darul Ta'zim vs Shan United - {'id': 1, 'name': 'ASEAN Club Championship', 'competitionId': 133776} - 2026-01-29T09:30:00.000Z"
+    },
+    "11695816": {
+      "betfair_id": "TODO",
+      "description": "CA Belgrano de Cordoba vs CA Tigre - {'id': 1, 'name': 'Argentina Primera LPF', 'competitionId': 150722} - 2026-01-29T22:15:00.000Z"
+    },
+    "11695817": {
+      "betfair_id": "TODO",
+      "description": "CA Lanus vs Union de Santa Fe - {'id': 1, 'name': 'Argentina Primera LPF', 'competitionId': 150722} - 2026-01-29T22:15:00.000Z"
+    },
+    "10976800": {
+      "betfair_id": "TODO",
+      "description": "Mirassol FC SP vs CR Vasco da Gama RJ - {'id': 1, 'name': 'Brasileiro Serie A', 'competitionId': 147196} - 2026-01-29T23:00:00.000Z"
+    },
+    "11717583": {
+      "betfair_id": "TODO",
+      "description": "Jaguares de Cordoba vs Internacional de Bogota. - {'id': 1, 'name': 'Colombia Primera A', 'competitionId': 149946} - 2026-01-29T23:10:00.000Z"
+    },
+    "10976749": {
+      "betfair_id": "TODO",
+      "description": "Botafogo FR RJ vs Cruzeiro EC MG - {'id': 1, 'name': 'Brasileiro Serie A', 'competitionId': 147196} - 2026-01-30T00:30:00.000Z"
+    },
+    "11698099": {
+      "betfair_id": "TODO",
+      "description": "CA Sarmiento Junin vs CA Banfield - {'id': 1, 'name': 'Argentina Primera LPF', 'competitionId': 150722} - 2026-01-30T00:30:00.000Z"
+    },
+    "11698098": {
+      "betfair_id": "TODO",
+      "description": "Estudiantes Rio Cuarto vs Argentinos Juniors - {'id': 1, 'name': 'Argentina Primera LPF', 'competitionId': 150722} - 2026-01-30T00:30:00.000Z"
+    },
+    "11719658": {
+      "betfair_id": "TODO",
+      "description": "America de Cali vs CD Once Caldas - {'id': 1, 'name': 'Colombia Primera A', 'competitionId': 149946} - 2026-01-30T01:20:00.000Z"
+    },
+    "11682024": {
+      "betfair_id": "TODO",
+      "description": "Wellington Phoenix FC vs Melbourne City FC - {'id': 1, 'name': 'A-League', 'competitionId': 139868} - 2026-01-30T06:00:00.000Z"
+    },
+    "11684234": {
+      "betfair_id": "TODO",
+      "description": "Adelaide United FC vs Macarthur FC - {'id': 1, 'name': 'A-League', 'competitionId': 139868} - 2026-01-30T09:05:00.000Z"
+    },
+    "11508218": {
+      "betfair_id": "TODO",
+      "description": "Club Puebla vs Deportivo Toluca FC - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-01-31T01:00:00.000Z"
+    },
+    "11508216": {
+      "betfair_id": "TODO",
+      "description": "Pumas UNAM vs Club Santos Laguna - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-01-31T03:00:00.000Z"
+    },
+    "11508213": {
+      "betfair_id": "TODO",
+      "description": "FC Juarez vs CF Cruz Azul - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-01-31T03:06:00.000Z"
+    },
+    "11702957": {
+      "betfair_id": "TODO",
+      "description": "Newcastle United Jets vs Brisbane Roar FC - {'id': 1, 'name': 'A-League', 'competitionId': 139868} - 2026-01-31T06:00:00.000Z"
+    },
+    "11704918": {
+      "betfair_id": "TODO",
+      "description": "Sydney FC vs Western Sydney Wanderers - {'id': 1, 'name': 'A-League', 'competitionId': 139868} - 2026-01-31T08:35:00.000Z"
+    },
+    "11706721": {
+      "betfair_id": "TODO",
+      "description": "Perth Glory FC vs Auckland FC - {'id': 1, 'name': 'A-League', 'competitionId': 139868} - 2026-01-31T10:45:00.000Z"
+    },
+    "11508237": {
+      "betfair_id": "TODO",
+      "description": "CF America vs Club Necaxa - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-01-31T22:00:00.000Z"
+    },
+    "11508215": {
+      "betfair_id": "TODO",
+      "description": "Atlas FC vs Mazatlan FC - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-01-31T23:00:00.000Z"
+    },
+    "11508238": {
+      "betfair_id": "TODO",
+      "description": "Atletico San Luis vs CD Guadalajara - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-01-31T23:00:00.000Z"
+    },
+    "11508212": {
+      "betfair_id": "TODO",
+      "description": "CF Monterrey vs Club Tijuana de Caliente - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-01T01:00:00.000Z"
+    },
+    "11508217": {
+      "betfair_id": "TODO",
+      "description": "Club Leon vs Tigres UANL - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-01T01:10:00.000Z"
+    },
+    "11723427": {
+      "betfair_id": "TODO",
+      "description": "Central Coast Mariners vs Melbourne Victory - {'id': 1, 'name': 'A-League', 'competitionId': 139868} - 2026-02-01T06:00:00.000Z"
+    },
+    "11508219": {
+      "betfair_id": "TODO",
+      "description": "Queretaro FC vs CF Pachuca - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-01T23:00:00.000Z"
+    },
+    "11606402": {
+      "betfair_id": "TODO",
+      "description": "CR Flamengo RJ vs SC Internacional RS - {'id': 1, 'name': 'Brasileiro Serie A', 'competitionId': 147196} - 2026-02-04T22:00:00.000Z"
+    },
+    "11713146": {
+      "betfair_id": "TODO",
+      "description": "Clube do Remo PA vs Mirassol FC SP - {'id': 1, 'name': 'Brasileiro Serie A', 'competitionId': 147196} - 2026-02-04T23:00:00.000Z"
+    },
+    "11606400": {
+      "betfair_id": "TODO",
+      "description": "Santos FC SP vs Sao Paulo FC SP - {'id': 1, 'name': 'Brasileiro Serie A', 'competitionId': 147196} - 2026-02-04T23:00:00.000Z"
+    },
+    "11606398": {
+      "betfair_id": "TODO",
+      "description": "SE Palmeiras SP vs EC Vitoria BA - {'id': 1, 'name': 'Brasileiro Serie A', 'competitionId': 147196} - 2026-02-05T00:30:00.000Z"
+    },
+    "11606401": {
+      "betfair_id": "TODO",
+      "description": "EC Bahia BA vs Fluminense FC RJ - {'id': 1, 'name': 'Brasileiro Serie A', 'competitionId': 147196} - 2026-02-05T22:00:00.000Z"
+    },
+    "11606476": {
+      "betfair_id": "TODO",
+      "description": "CR Vasco da Gama RJ vs Chapecoense SC - {'id': 1, 'name': 'Brasileiro Serie A', 'competitionId': 147196} - 2026-02-05T23:00:00.000Z"
+    },
+    "11606477": {
+      "betfair_id": "TODO",
+      "description": "Cruzeiro EC MG vs Coritiba FC PR - {'id': 1, 'name': 'Brasileiro Serie A', 'competitionId': 147196} - 2026-02-06T00:30:00.000Z"
+    },
+    "11650496": {
+      "betfair_id": "TODO",
+      "description": "Club Necaxa vs Atletico San Luis - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-07T01:00:00.000Z"
+    },
+    "11650490": {
+      "betfair_id": "TODO",
+      "description": "Tigres UANL vs Club Santos Laguna - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-07T01:00:00.000Z"
+    },
+    "11650487": {
+      "betfair_id": "TODO",
+      "description": "Club Tijuana de Caliente vs Club Puebla - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-07T03:00:00.000Z"
+    },
+    "11650488": {
+      "betfair_id": "TODO",
+      "description": "Mazatlan FC vs CD Guadalajara - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-07T03:06:00.000Z"
+    },
+    "11650499": {
+      "betfair_id": "TODO",
+      "description": "Queretaro FC vs Club Leon - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-07T23:00:00.000Z"
+    },
+    "11650100": {
+      "betfair_id": "TODO",
+      "description": "Deportivo Toluca FC vs CF Cruz Azul - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-07T23:00:00.000Z"
+    },
+    "11650495": {
+      "betfair_id": "TODO",
+      "description": "Atlas FC vs Pumas UNAM - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-08T01:00:00.000Z"
+    },
+    "11650489": {
+      "betfair_id": "TODO",
+      "description": "CF Pachuca vs FC Juarez - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-08T01:00:00.000Z"
+    },
+    "11650501": {
+      "betfair_id": "TODO",
+      "description": "CF America vs CF Monterrey - {'id': 1, 'name': 'Liga MX Clausura', 'competitionId': 146909} - 2026-02-08T03:00:00.000Z"
+    },
+    "11616655": {
+      "betfair_id": "TODO",
+      "description": "Al-Qadsiah Al Khubar vs Al Hilal Riyadh - {'id': 1, 'name': 'Saudi Arabia Pro League', 'competitionId': 133899} - 2026-01-29T17:30:00.000Z"
+    },
+    "11616599": {
+      "betfair_id": "TODO",
+      "description": "Al Hazm vs Al Shabab Riyadh - {'id': 1, 'name': 'Saudi Arabia Pro League', 'competitionId': 133899} - 2026-01-29T17:30:00.000Z"
+    },
+    "11692435": {
+      "betfair_id": "TODO",
+      "description": "Modern Sport FC vs Ismaily SC - {'id': 1, 'name': 'Egypt Premier League', 'competitionId': 132113} - 2026-01-29T18:00:00.000Z"
+    },
+    "11692394": {
+      "betfair_id": "TODO",
+      "description": "SL Benfica B vs Lusitania FC Lourosa - {'id': 1, 'name': 'Liga Portugal 2', 'competitionId': 132215} - 2026-01-29T18:00:00.000Z"
+    },
+    "11692436": {
+      "betfair_id": "TODO",
+      "description": "Ghazl El Mahallah vs Talaea El Gaish - {'id': 1, 'name': 'Egypt Premier League', 'competitionId': 132113} - 2026-01-29T18:00:00.000Z"
     }
   }
 }

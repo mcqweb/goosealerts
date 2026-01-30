@@ -179,7 +179,7 @@ class PlayerDatabase:
     def track_player(self, player_key: str, raw_name: str, site_name: str, 
                     match_id: Optional[str] = None, team_name: Optional[str] = None,
                     fixture: Optional[str] = None) -> None:
-        """Track a player sighting.
+        """Track a player sighting (UPSERT - updates if exists, inserts if new).
         
         Args:
             player_key: Normalized or preferred name (used for grouping)
@@ -188,14 +188,23 @@ class PlayerDatabase:
             match_id: Optional match identifier
             team_name: Optional team name (e.g., 'Manchester United')
             fixture: Optional fixture string (e.g., 'Manchester United v Liverpool')
+        
+        Note:
+            Uses UPSERT on (player_key, site_name, team_name, fixture) to prevent duplicates.
+            Always pass team_name to avoid creating separate entries for same player.
         """
         now = datetime.now(timezone.utc).isoformat()
         
         with self._get_connection() as conn:
-            # Add tracking record
+            # UPSERT tracking record - update if exists, insert if new
+            # The unique constraint is on (player_key, site_name, team_name, fixture)
             conn.execute("""
                 INSERT INTO player_tracking (player_key, raw_name, site_name, match_id, team_name, fixture, seen_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(player_key, site_name, team_name, fixture) DO UPDATE SET
+                    raw_name = excluded.raw_name,
+                    match_id = COALESCE(excluded.match_id, match_id),
+                    seen_at = excluded.seen_at
             """, (player_key, raw_name, site_name, match_id, team_name, fixture, now))
             
             # Update stats (upsert)

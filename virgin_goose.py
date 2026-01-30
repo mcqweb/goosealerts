@@ -808,69 +808,50 @@ def get_mapped_name(player_name, mappings=None):
     
     return None
 
-def track_player_name(player_name, site_name, match_id=None):
+def is_valid_player_name(player_name):
+    """Check if a name should be tracked/processed as a player.
+    
+    Args:
+        player_name: Player name to check
+    
+    Returns:
+        False if name should be ignored (e.g., 'No Goalscorer'), True otherwise
+    """
+    if not player_name:
+        return False
+    
+    # Normalize and check against ignored names
+    normalized = player_name.lower().strip()
+    ignored_names = ['no goalscorer', 'no goal scorer', 'no scorer']
+    return normalized not in ignored_names
+
+def track_player_name(player_name, site_name, match_id=None, team_name=None, fixture=None):
     """Track a player name seen on a specific site for mapping suggestions.
     
     Args:
         player_name: Raw player name as it appears on the site
         site_name: Site identifier (e.g., 'betfair', 'williamhill', 'virgin')
         match_id: Optional match ID for context
-    """
-    if not player_name or not site_name:
-        return
+        team_name: Optional team name (e.g., 'Manchester United')
+        fixture: Optional fixture string (e.g., 'Manchester United v Liverpool')
     
-    try:
-        # Ensure data directory exists
-        os.makedirs(os.path.dirname(PLAYER_TRACKING_FILE), exist_ok=True)
-        
-        # Load existing tracking data
-        tracking_data = {}
-        if os.path.exists(PLAYER_TRACKING_FILE):
-            try:
-                with open(PLAYER_TRACKING_FILE, 'r', encoding='utf-8') as f:
-                    tracking_data = json.load(f)
-            except Exception:
-                tracking_data = {}
-        
-        # Check if this name has a mapping - if so, use the preferred name as the key
-        mappings = load_player_mappings()
-        norm_name = normalize_name(player_name)
-        preferred_name = mappings.get(norm_name)
-        
-        # Use preferred name as key if mapped, otherwise use normalized name
-        tracking_key = preferred_name if preferred_name else norm_name
-        
-        if tracking_key not in tracking_data:
-            tracking_data[tracking_key] = {
-                'raw_names': {},
-                'first_seen': datetime.now(timezone.utc).isoformat(),
-                'last_seen': datetime.now(timezone.utc).isoformat(),
-                'occurrence_count': 0
-            }
-        
-        entry = tracking_data[tracking_key]
-        
-        # Track raw name by site
-        if site_name not in entry['raw_names']:
-            entry['raw_names'][site_name] = []
-        
-        # Add raw name if not already tracked for this site
-        if player_name not in entry['raw_names'][site_name]:
-            entry['raw_names'][site_name].append(player_name)
-        
-        # Update metadata
-        entry['last_seen'] = datetime.now(timezone.utc).isoformat()
-        entry['occurrence_count'] = entry.get('occurrence_count', 0) + 1
-        
-        # Save atomically
-        tmp_file = PLAYER_TRACKING_FILE + '.tmp'
-        with open(tmp_file, 'w', encoding='utf-8') as f:
-            json.dump(tracking_data, f, indent=2, sort_keys=True)
-        os.replace(tmp_file, PLAYER_TRACKING_FILE)
-        
-    except Exception as e:
-        # Don't let tracking failures break the main flow
-        print(f"[WARN] Failed to track player name '{player_name}' on {site_name}: {e}")
+    Note:
+        If team_name is None and fixture is provided, attempts to extract team from fixture.
+        Ignores non-player names like 'No Goalscorer'.
+    """
+    # Skip non-player names
+    if not is_valid_player_name(player_name):
+        return
+    # Extract team from fixture if not provided
+    if team_name is None and fixture:
+        # Try to extract first team from fixture (e.g., "Man Utd v Liverpool" -> "Man Utd")
+        parts = fixture.split(' v ')
+        if len(parts) >= 2:
+            team_name = parts[0].strip()
+    
+    # Delegate to player_names module which handles SQLite/JSON backend
+    from player_names import track_player_name as track_player
+    track_player(player_name, site_name, match_id, team_name, fixture)
 
 def suggest_mappings_for_player(player_name, site_name):
     """Suggest possible mappings for a player based on tracking data.
@@ -1064,8 +1045,8 @@ def match_player_name_with_mapping(target_name, target_site, candidates, source_
     if not target_name or not candidates:
         return None
     
-    # Track the target name
-    track_player_name(target_name, target_site)
+    # Note: Player tracking is done in main processing loops with full match context
+    # to avoid creating duplicate entries without fixture/team data
     
     # Load mappings if not provided
     if mappings is None:
@@ -1079,7 +1060,6 @@ def match_player_name_with_mapping(target_name, target_site, candidates, source_
         for candidate in candidates:
             # Handle both string candidates and dict-like objects with 'name' key
             cand_name = candidate if isinstance(candidate, str) else candidate.get('name', '')
-            track_player_name(cand_name, source_site)
             
             if normalize_name(cand_name) == target_norm:
                 return candidate
@@ -1091,7 +1071,6 @@ def match_player_name_with_mapping(target_name, target_site, candidates, source_
             target_norm = normalize_name(wh_format)
             for candidate in candidates:
                 cand_name = candidate if isinstance(candidate, str) else candidate.get('name', '')
-                track_player_name(cand_name, source_site)
                 
                 if normalize_name(cand_name) == target_norm:
                     return candidate
@@ -1099,7 +1078,6 @@ def match_player_name_with_mapping(target_name, target_site, candidates, source_
     # Also check if any candidate has a mapping that matches our target
     for candidate in candidates:
         cand_name = candidate if isinstance(candidate, str) else candidate.get('name', '')
-        track_player_name(cand_name, source_site)
         
         cand_mapped = get_mapped_name(cand_name, mappings)
         if cand_mapped and mapped_name and normalize_name(cand_mapped) == normalize_name(mapped_name):
@@ -2069,9 +2047,11 @@ def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type, 
     # Add Betfair odds
     for odd in betfair_odds:
         player_name = odd.get('outcome', '')
-        if player_name:
+        if player_name and is_valid_player_name(player_name):
             track_player_name(player_name, 'betfair', match_id=match_id,
                             fixture=match_context['fixture'])
+        if not is_valid_player_name(player_name):
+            continue
         combined.append({
             'player_name': player_name,
             'site': 'Betfair',
@@ -2085,6 +2065,8 @@ def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type, 
     # Add exchange odds
     exchange_market = exchange_odds.get(market_type, {})
     for player_name, site_odds_list in exchange_market.items():
+        if not is_valid_player_name(player_name):
+            continue
         for site_odd in site_odds_list:
             site_name = site_odd.get('site_name', '').lower()
             if player_name and site_name:
@@ -2273,6 +2255,19 @@ def main():
                 time.sleep(300)
                 continue
             
+            # Prefetch oddschecker slugs for all matches (batch operation)
+            # Use BETFAIR IDs to get oddschecker slugs (not oddschecker IDs from mappings)
+            if ENABLE_ODDSCHECKER:
+                betfair_ids_for_oc = []
+                for match in all_matches_cache:
+                    betfair_id = match.get('mappings', {}).get('betfair')
+                    if betfair_id:
+                        betfair_ids_for_oc.append(betfair_id)
+                
+                if betfair_ids_for_oc:
+                    from oc import prefetch_oddschecker_slugs
+                    prefetch_oddschecker_slugs(betfair_ids_for_oc)
+            
             # Find the earliest match that hasn't started yet
             upcoming_matches = [m for m in all_matches_cache if m['minutes_until'] > -90]  # Include matches that started recently
             
@@ -2398,7 +2393,8 @@ def main():
                 print(f"  -> Fetching Betfair odds...")
                 betfair_match = betfair.fetch_single_match(betfair_id)
                 if not betfair_match:
-                    print("  [SKIP] Failed to fetch Betfair match data")
+                    print(f"  [SKIP] Failed to fetch Betfair match data (returned None) - Match ID: {betfair_id}")
+                    print(f"         Common reasons: No goalscorer markets available, match suspended, or invalid ID")
                     continue
                 
                 mnodes = betfair_match.get('market_nodes') or []
@@ -2442,13 +2438,12 @@ def main():
                     print(f"    [DEBUG] Confirmed starters fetched: {len(confirmed_starters)} players - {confirmed_starters}")
                     
                     # Fetch OddsChecker match slug once per match (for ARB alerts)
+                    # Use Betfair ID to look up slug (already prefetched in cache)
                     match_slug = None
-                    if ENABLE_ODDSCHECKER:
-                        oddschecker_id = mappings.get('oddschecker')
-                        if oddschecker_id:
-                            match_slug = get_oddschecker_match_slug(oddschecker_id)
-                            if match_slug:
-                                print(f"    [OC] Match slug: {match_slug}")
+                    if ENABLE_ODDSCHECKER and betfair_id:
+                        match_slug = get_oddschecker_match_slug(betfair_id)
+                        if match_slug:
+                            print(f"    [OC] Match slug: {match_slug}")
                     
                     # Initialize WH client once per match if enabled
                     wh_client = None
@@ -2526,11 +2521,13 @@ def main():
                             
                             # Process each player (only once, with all their exchange odds)
                             for pname, player_exchanges in player_odds_map.items():
+                                if not is_valid_player_name(pname):
+                                    continue
                                 # Track this player for all exchange sites they appear on
                                 for exch in player_exchanges:
                                     site = exch.get('site', '').lower()
                                     if site and pname:
-                                        track_player_name(pname, site)
+                                        track_player_name(pname, site, match_id=betfair_id, fixture=fixture)
                                 total_players_processed += 1
                                 
                                 # Find the best (lowest) lay odds and largest size for threshold checks
@@ -3004,11 +3001,13 @@ def main():
                                 tom_market = exchange_odds.get('Two or More Goals', {})
                                 
                                 for player_name, odds_list in tom_market.items():
+                                    if not is_valid_player_name(player_name):
+                                        continue
                                     # Track player name from exchange
                                     for odd in odds_list:
                                         site = odd.get('site_name', '').lower()
                                         if site:
-                                            track_player_name(player_name, site)
+                                            track_player_name(player_name, site, match_id=betfair_id, fixture=fixture)
                                     total_players_processed += 1
                                     
                                     # Find best (lowest) lay odds
@@ -3108,11 +3107,13 @@ def main():
                                 hat_market = exchange_odds.get('Hat-trick', {})
                                 
                                 for player_name, odds_list in hat_market.items():
+                                    if not is_valid_player_name(player_name):
+                                        continue
                                     # Track player name from exchange
                                     for odd in odds_list:
                                         site = odd.get('site_name', '').lower()
                                         if site:
-                                            track_player_name(player_name, site)
+                                            track_player_name(player_name, site, match_id=betfair_id, fixture=fixture)
                                     total_players_processed += 1
                                     
                                     # Find best (lowest) lay odds
@@ -3208,6 +3209,7 @@ def main():
             
             except Exception as e:
                 print(f"  [ERROR] Failed to process match {betfair_id}: {e}")
+                traceback.print_exc()
                 traceback.print_exc()
                 continue
 
