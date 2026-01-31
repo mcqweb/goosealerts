@@ -482,6 +482,26 @@ def load_alert_config():
                         dest['color'] = 0x3AA3E3  # Default color
         
         print(f"[CONFIG] Loaded alert configuration from {ALERT_CONFIG_FILE}")
+
+        # Validate destinations for bot tokens and report status (useful for startup diagnostics)
+        try:
+            for alert_type, destinations in config.items():
+                for dest in destinations:
+                    name = dest.get('name', '<unnamed>')
+                    enabled = dest.get('enabled', True)
+                    channel_id = dest.get('channel_id', '')
+                    if not enabled:
+                        continue
+                    # Determine token source
+                    token_literal = bool(dest.get('bot_token'))
+                    token_env_name = dest.get('bot_token_env')
+                    token_env_value = os.getenv(token_env_name, '') if token_env_name else ''
+                    token_ok = token_literal or bool(token_env_value)
+                    source = 'literal' if token_literal else (f'env:{token_env_name}' if token_env_name else 'none')
+                    print(f"[ALERT CONFIG] {alert_type} -> {name}: channel={channel_id} token_ok={token_ok} token_source={source}")
+        except Exception as e:
+            print(f"[WARN] Failed to validate alert config tokens: {e}")
+
         return config
         
     except Exception as e:
@@ -661,12 +681,15 @@ def send_alert_to_destinations(alert_type, title, description, fields, footer=No
         else:
             title_with_prefix = title
         
-        # Get bot token from environment
+        # Get bot token: prefer literal `bot_token` in config, else use env var name in `bot_token_env`
+        bot_token = dest.get('bot_token')
         bot_token_env = dest.get('bot_token_env', 'DISCORD_BOT_TOKEN')
-        bot_token = os.getenv(bot_token_env, '')
+        if not bot_token and bot_token_env:
+            bot_token = os.getenv(bot_token_env, '')
         
         if not bot_token:
-            print(f"[WARN] No bot token found for {bot_token_env}")
+            dest_name = dest.get('name', '<no-name>')
+            print(f"[WARN] No bot token found for destination {dest_name}. Checked literal 'bot_token' and env '{bot_token_env}'")
             continue
         
         channel_id = dest.get('channel_id', '')
@@ -1751,6 +1774,25 @@ def fetch_lineups(oddsmatcha_match_id):
         Set of player names who are confirmed starters, or empty set if unavailable
     """
     try:
+        # Check cache first - if we have confirmed starters cached, reuse them
+        cache_dir = os.path.join(BASE_DIR, 'cache', 'lineups')
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+        except Exception:
+            pass
+        cache_file = os.path.join(cache_dir, f"{oddsmatcha_match_id}.json")
+        try:
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r', encoding='utf-8') as cf:
+                    cached = json.load(cf)
+                cached_starters = cached.get('starters') if isinstance(cached, dict) else None
+                if cached_starters:
+                    print(f"[LINEUPS] Using cached confirmed starters for match {oddsmatcha_match_id} ({len(cached_starters)} players)")
+                    return set(cached_starters)
+        except Exception:
+            # Fall through to fetching if cache read fails
+            pass
+
         api = f"https://api.oddsmatcha.uk/lineups/{oddsmatcha_match_id}"
         resp = requests.get(api, timeout=10)
         if not resp.ok:
@@ -1802,6 +1844,16 @@ def fetch_lineups(oddsmatcha_match_id):
 
         if starters:
             print(f"[LINEUPS] Fetched {len(starters)} confirmed starters for match {oddsmatcha_match_id}")
+            # Cache confirmed starters so future calls reuse them for this match
+            try:
+                cache_dir = os.path.join(BASE_DIR, 'cache', 'lineups')
+                os.makedirs(cache_dir, exist_ok=True)
+                cache_file = os.path.join(cache_dir, f"{oddsmatcha_match_id}.json")
+                with open(cache_file, 'w', encoding='utf-8') as cf:
+                    json.dump({'ts': time.time(), 'starters': sorted(list(starters))}, cf)
+                print(f"[LINEUPS] Cached {len(starters)} starters for match {oddsmatcha_match_id}")
+            except Exception as e:
+                print(f"[LINEUPS] Failed to cache starters for match {oddsmatcha_match_id}: {e}")
         else:
             print(f"[LINEUPS] No starters found for match {oddsmatcha_match_id} (home: {len(home_lineup)}, away: {len(away_lineup)})")
 
@@ -1822,50 +1874,61 @@ def is_confirmed_starter(player_name, starters):
         True if player name matches a starter (mapped, exact, or fuzzy), False otherwise
     """
     import re
-    
+
     if not player_name or not starters:
         return False
-    
+
+    # Normalize incoming player name
+    norm_player = normalize_name(player_name)
+
+    # Build normalized starters set for comparisons
+    try:
+        norm_starters = {normalize_name(s) for s in starters}
+    except Exception:
+        return False
+
     # Load manual mappings
     mappings = load_player_mappings()
-    
+
     # Check if player_name has a manual mapping
     mapped_player = get_mapped_name(player_name, mappings)
-    
-    # Try exact match first (with both original and mapped names)
-    if player_name in starters:
+    norm_mapped_player = normalize_name(mapped_player) if mapped_player else None
+
+    # Exact normalized match first
+    if norm_player in norm_starters:
         return True
-    if mapped_player and mapped_player in starters:
+    if norm_mapped_player and norm_mapped_player in norm_starters:
         return True
-    
-    # Check if any starter has a mapping that matches our player
-    if mapped_player:
-        for starter in starters:
-            mapped_starter = get_mapped_name(starter, mappings)
-            if mapped_starter and normalize_name(mapped_starter) == normalize_name(mapped_player):
+
+    # Check if any starter has a mapping that matches our player mapping
+    if norm_mapped_player:
+        for starter in norm_starters:
+            starter_mapped = get_mapped_name(starter, mappings)
+            if starter_mapped and normalize_name(starter_mapped) == norm_mapped_player:
                 return True
-    
-    # Fuzzy match: split on spaces and hyphens, match 2+ parts
+
+    # Fuzzy match: split on spaces and hyphens using normalized names
     def name_parts(name):
-        parts = set(re.split(r'[\s\-]+', name.lower()))
+        norm = normalize_name(name)
+        parts = set(re.split(r'[\s\-]+', norm))
         return {p for p in parts if len(p) > 1}
-    
-    player_parts = name_parts(player_name)
-    if mapped_player:
-        player_parts = player_parts | name_parts(mapped_player)
-    
-    for starter in starters:
+
+    player_parts = name_parts(norm_player)
+    if norm_mapped_player:
+        player_parts = player_parts | name_parts(norm_mapped_player)
+
+    for starter in norm_starters:
         starter_parts = name_parts(starter)
         matches = len(player_parts & starter_parts)
         total_parts = len(player_parts | starter_parts)
-        
+
         if total_parts == 0:
             continue
-        
+
         # 2+ matches or >50% match rate
         if matches >= 2 or (matches / total_parts >= 0.5):
             return True
-    
+
     return False
 
 def fetch_exchange_odds(oddsmatcha_match_id):
@@ -2197,14 +2260,45 @@ def main():
         # Fetch matches once per day (or at startup)
         if all_matches_cache is None:
             print("\n[ODDSMATCHA] Fetching today's matches...")
-            all_matches_cache = fetch_matches_from_oddsmatcha(next_days=0)
-            last_match_fetch = datetime.now(timezone.utc)
-            
-            if not all_matches_cache:
-                print("[WARN] No matches returned from OddsMatcha API")
-                print("[WAIT] Retrying in 5 minutes...")
-                time.sleep(300)
-                continue
+            # Retry a few times in case of transient API failures returning 0 matches
+            attempts = 3
+            matches = None
+            for attempt in range(1, attempts + 1):
+                matches = fetch_matches_from_oddsmatcha(next_days=0)
+                last_match_fetch = datetime.now(timezone.utc)
+                if matches:
+                    break
+                print(f"[ODDSMATCHA] Attempt {attempt}/{attempts} returned 0 matches")
+                if attempt < attempts:
+                    time.sleep(10)  # short wait before retry
+            if not matches:
+                # Try using cached matches for today (if available)
+                cache_file = os.path.join(BASE_DIR, 'cache', 'matches_today.json')
+                try:
+                    if os.path.exists(cache_file):
+                        with open(cache_file, 'r', encoding='utf-8') as cf:
+                            cached = json.load(cf)
+                        cached_ts = cached.get('ts')
+                        cached_matches = cached.get('matches', [])
+                        if cached_ts and cached_matches:
+                            try:
+                                cached_date = datetime.fromisoformat(cached_ts).date()
+                                if cached_date == datetime.now(timezone.utc).date():
+                                    print(f"[ODDSMATCHA] Using cached {len(cached_matches)} matches for today from {cache_file}")
+                                    matches = cached_matches
+                                else:
+                                    print("[ODDSMATCHA] Cached matches are not from today")
+                            except Exception:
+                                print("[ODDSMATCHA] Invalid timestamp in matches cache")
+                except Exception as e:
+                    print(f"[WARN] Failed to read matches cache: {e}")
+
+                if not matches:
+                    print("[WARN] No matches returned from OddsMatcha API after retries")
+                    print("[WAIT] Retrying in 5 minutes...")
+                    time.sleep(300)
+                    continue
+            all_matches_cache = matches
             
             # Parse and display all matches with kickoff times
             now_utc = datetime.now(timezone.utc)
@@ -2248,6 +2342,23 @@ def main():
                     continue
             
             all_matches_cache = valid_matches
+            print(f"[INFO] {len(all_matches_cache)} matches saved to cache for today")
+
+            # Save today's matches to cache so we can reuse if API later fails
+            try:
+                cache_dir = os.path.join(BASE_DIR, 'cache')
+                os.makedirs(cache_dir, exist_ok=True)
+                cache_file = os.path.join(cache_dir, 'matches_today.json')
+                with open(cache_file, 'w', encoding='utf-8') as cf:
+                    json.dump({'ts': datetime.now(timezone.utc).isoformat(), 'matches': all_matches_cache}, cf, indent=2)
+                print(f"[ODDSMATCHA] Saved {len(all_matches_cache)} matches to cache: {cache_file}")
+            except Exception as e:
+                print(f"[WARN] Failed to write matches cache: {e}")
+
+            # Print a short summary of upcoming matches
+            if all_matches_cache:
+                upcoming_names = ', '.join([m.get('name') for m in all_matches_cache])
+                print(f"[SCHEDULE SUMMARY] Upcoming today: {len(all_matches_cache)} - {upcoming_names}")
             
             if not all_matches_cache:
                 print("\n[WARN] No valid matches found for today")
@@ -2770,70 +2881,125 @@ def main():
                                             )
                                             
                                             # Send separate WH message if configured
-                                            if DISCORD_WH_CHANNEL_ID:
-                                                # Require lineup confirmation before sending WH alert
-                                                if not confirmed_starters:
-                                                    print(f"[WH] Skipping alert for {pname} - no lineup data available")
-                                                elif not is_confirmed_starter(pname, confirmed_starters):
-                                                    print(f"[WH] Skipping alert for {pname} - not in confirmed starters")
-                                                else:
-                                                    if boosted_odds >= float(betfair_lay_bet[0]['lay_odds']):
-                                                        rating = round(boosted_odds / price * 100, 2)
-                                                        title = f"{pname} - {label} - {boosted_odds}/{price} ({rating}%)"
+                                            alert_sent = False
+                                            alert_block_reasons = []
 
-                                                        desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
-                                                        fields = []
+                                            # Note missing WH channel early
+                                            if not DISCORD_WH_CHANNEL_ID:
+                                                alert_block_reasons.append('no_wh_channel')
 
-                                                        # Add confirmed starter field if applicable
-                                                        if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
-                                                            fields.append(("Confirmed Starter", "✅"))
-                                                        #build footer
-                                                        if label == "FGS":
-                                                            footer_text = f"{pname} FGS + AGS + Over 0.5 Goals"
-                                                        elif label == "AGS":
-                                                            footer_text = f"{pname} AGS + G/A + Over 0.5 Goals"
+                                            # Require lineup confirmation before sending WH alert
+                                            if not confirmed_starters:
+                                                print(f"[WH] Skipping alert for {pname} - no lineup data available")
+                                                alert_block_reasons.append('no_lineup')
+                                            elif not is_confirmed_starter(pname, confirmed_starters):
+                                                print(f"[WH] Skipping alert for {pname} - not in confirmed starters")
+                                                alert_block_reasons.append('not_in_confirmed_starters')
+                                            else:
+                                                if boosted_odds >= float(betfair_lay_bet[0]['lay_odds']):
+                                                    rating = round(boosted_odds / price * 100, 2)
+                                                    title = f"{pname} - {label} - {boosted_odds}/{price} ({rating}%)"
+
+                                                    desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
+                                                    fields = []
+
+                                                    # Add confirmed starter field if applicable
+                                                    if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
+                                                        fields.append(("Confirmed Starter", "✅"))
+                                                    #build footer
+                                                    if label == "FGS":
+                                                        footer_text = f"{pname} FGS + AGS + Over 0.5 Goals"
+                                                    elif label == "AGS":
+                                                        footer_text = f"{pname} AGS + G/A + Over 0.5 Goals"
+                                                    # Prefer sending via ALERT_CONFIG destinations if configured
+                                                    sent_count = 0
+                                                    if ALERT_CONFIG and 'williamhill' in ALERT_CONFIG:
+                                                        try:
+                                                            sent_count = send_alert_to_destinations('williamhill', title, desc, fields, footer=footer_text, rating=rating, is_smarkets_only=False, config=ALERT_CONFIG)
+                                                        except Exception as e:
+                                                            print(f"[WH] Error sending via ALERT_CONFIG: {e}")
+                                                            sent_count = 0
+
+                                                    # Fallback to legacy single-channel env var
+                                                    if sent_count == 0 and DISCORD_WH_CHANNEL_ID:
                                                         send_discord_embed(title, desc, fields, colour=0x00143C, channel_id=DISCORD_WH_CHANNEL_ID, footer=footer_text)
+                                                        sent_count = 1
+
+                                                    if sent_count > 0:
                                                         save_state(f"{pname}_{label}", wh_match_id, WH_STATE_FILE)
                                                         print(f"[WH ALERT] {pname} {label} @ {boosted_odds} (rating: {rating}%)")
-                                                    
-                                                    # Send Smarkets-only alert if configured and Smarkets lay is available
-                                                    if DISCORD_WH_SMARKETS_CHANNEL_ID and not already_alerted(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE):
-                                                        # Check if Smarkets lay price is available
-                                                        has_smarkets = False
-                                                        smarkets_price = None
-                                                        smarkets_liquidity = None
-                                                        
-                                                        for exchange in player_exchanges:
-                                                            if exchange['site'].lower() == 'smarkets':
-                                                                has_smarkets = True
-                                                                smarkets_price = exchange['lay_odds']
-                                                                smarkets_liquidity = exchange['lay_size']
-                                                                break
-                                                        
-                                                        if has_smarkets and boosted_odds >= smarkets_price:
-                                                            # Build Smarkets-only description (no Betfair mention)
-                                                            smarkets_lay_text = f"Smarkets @ {smarkets_price}"
-                                                            if smarkets_liquidity:
-                                                                smarkets_lay_text += f" (£{int(smarkets_liquidity)})"
-                                                            
-                                                            rating_sm = round(boosted_odds / smarkets_price * 100, 2)
-                                                            title_sm = f"{pname} - {label} - {boosted_odds}/{smarkets_price} ({rating_sm}%)"
-                                                            desc_sm = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Price:** {smarkets_lay_text}"
-                                                            
-                                                            fields_sm = [("Confirmed Starter", "✅")]
-                                                            
-                                                            # Use same footer as main WH alert
-                                                            footer_text_sm = footer_text
-                                                            
-                                                            send_discord_embed(title_sm, desc_sm, fields_sm, colour=0x00143C, 
-                                                                             channel_id=DISCORD_WH_SMARKETS_CHANNEL_ID, 
-                                                                             footer=footer_text_sm,
-                                                                             bot_token=DISCORD_BOT_TOKEN_SMARKETS)
-                                                            save_state(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE)
-                                                            print(f"[WH SMARKETS ALERT] {pname} {label} @ {boosted_odds} vs Smarkets @ {smarkets_price} (rating: {rating_sm}%)")
-                                                    
+                                                        alert_sent = True
                                                     else:
-                                                        print(f"[WH] No alert - WH odds {boosted_odds} < Lay {price}")
+                                                        alert_block_reasons.append('no_wh_destinations')
+                                                else:
+                                                    print(f"[WH] No WH alert - WH odds {boosted_odds} < Lay {price}")
+                                                    alert_block_reasons.append('odds_below_lay')
+                                                    
+                                                    # Smarkets-only alert handling
+                                                    # Determine Smarkets price if present
+                                                    has_smarkets = False
+                                                    smarkets_price = None
+                                                    smarkets_liquidity = None
+                                                    for exchange in player_exchanges:
+                                                        if exchange['site'].lower() == 'smarkets':
+                                                            has_smarkets = True
+                                                            smarkets_price = exchange['lay_odds']
+                                                            smarkets_liquidity = exchange['lay_size']
+                                                            break
+
+                                                    if not DISCORD_WH_SMARKETS_CHANNEL_ID:
+                                                        alert_block_reasons.append('no_smarkets_channel')
+                                                    else:
+                                                        if already_alerted(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE):
+                                                            alert_block_reasons.append('already_alerted_smarkets')
+                                                        else:
+                                                            if has_smarkets and smarkets_price is not None and boosted_odds >= smarkets_price:
+                                                                # Build Smarkets-only description (no Betfair mention)
+                                                                smarkets_lay_text = f"Smarkets @ {smarkets_price}"
+                                                                if smarkets_liquidity:
+                                                                    smarkets_lay_text += f" (£{int(smarkets_liquidity)})"
+                                                                
+                                                                rating_sm = round(boosted_odds / smarkets_price * 100, 2)
+                                                                title_sm = f"{pname} - {label} - {boosted_odds}/{smarkets_price} ({rating_sm}%)"
+                                                                desc_sm = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Price:** {smarkets_lay_text}"
+                                                                
+                                                                fields_sm = [("Confirmed Starter", "✅")]
+                                                                
+                                                                # Use same footer as main WH alert (safe fallback)
+                                                                footer_text_sm = locals().get('footer_text', f"{pname} {label}")
+                                                                
+                                                                # Prefer ALERT_CONFIG destinations for Smarkets-only alerts
+                                                                sent_count_sm = 0
+                                                                if ALERT_CONFIG and 'williamhill' in ALERT_CONFIG:
+                                                                    try:
+                                                                        sent_count_sm = send_alert_to_destinations('williamhill', title_sm, desc_sm, fields_sm, footer=footer_text_sm, rating=rating_sm, is_smarkets_only=True, config=ALERT_CONFIG)
+                                                                    except Exception as e:
+                                                                        print(f"[WH] Error sending Smarkets-only via ALERT_CONFIG: {e}")
+                                                                        sent_count_sm = 0
+
+                                                                # Fallback to legacy env var
+                                                                if sent_count_sm == 0 and DISCORD_WH_SMARKETS_CHANNEL_ID:
+                                                                    send_discord_embed(title_sm, desc_sm, fields_sm, colour=0x00143C, channel_id=DISCORD_WH_SMARKETS_CHANNEL_ID, footer=footer_text_sm, bot_token=DISCORD_BOT_TOKEN_SMARKETS)
+                                                                    sent_count_sm = 1
+
+                                                                if sent_count_sm > 0:
+                                                                    save_state(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE)
+                                                                    print(f"[WH SMARKETS ALERT] {pname} {label} @ {boosted_odds} vs Smarkets @ {smarkets_price} (rating: {rating_sm}%)")
+                                                                    alert_sent = True
+                                                                else:
+                                                                    alert_block_reasons.append('no_smarkets_destinations')
+                                                            else:
+                                                                if not has_smarkets:
+                                                                    alert_block_reasons.append('no_smarkets_price')
+                                                                elif smarkets_price is None:
+                                                                    alert_block_reasons.append('no_smarkets_price')
+                                                                elif boosted_odds < smarkets_price:
+                                                                    alert_block_reasons.append('smarkets_odds_below')
+                                            # Final reporting when no alerts were sent
+                                            if not alert_sent:
+                                                reasons = ', '.join(sorted(set(alert_block_reasons))) if alert_block_reasons else 'unknown'
+                                                print(f"[WH] No alert sent - reasons: {reasons}; WH_channel_set={bool(DISCORD_WH_CHANNEL_ID)}, WH_Smarkets_channel_set={bool(DISCORD_WH_SMARKETS_CHANNEL_ID)}, smarkets_price={smarkets_price if 'smarkets_price' in locals() else 'N/A'}")
+
                                         else:
                                             print(f"[WH] Failed to get price for {pname} {label}")
                                             continue
