@@ -1844,9 +1844,11 @@ def fetch_lineups(oddsmatcha_match_id, fallback_match=None):
         home_lineup = (data.get('home_lineup') or {}).get('line_up', [])
         away_lineup = (data.get('away_lineup') or {}).get('line_up', [])
         
-        # Extract team names from lineup data
-        home_team = (data.get('home_lineup') or {}).get('team_name')
-        away_team = (data.get('away_lineup') or {}).get('team_name')
+        # Prefer explicit top-level team fields when present; fall back to lineup block
+        home_team = data.get('home_team') or (data.get('home_lineup') or {}).get('team_name')
+        away_team = data.get('away_team') or (data.get('away_lineup') or {}).get('team_name')
+        if data.get('home_team') or data.get('away_team'):
+            print(f"[LINEUPS] Using top-level team fields for match {oddsmatcha_match_id}: {home_team} v {away_team}")
         fixture = f"{home_team} v {away_team}" if home_team and away_team else None
 
         # If fixture is missing, try to populate from provided fallback match (from main loop) first
@@ -1921,6 +1923,9 @@ def fetch_lineups(oddsmatcha_match_id, fallback_match=None):
                         print(f"[LINEUPS] Backfilled {updated} player_tracking rows for match {oddsmatcha_match_id}")
             except Exception as e:
                 print(f"[LINEUPS] Failed to backfill DB rows for match {oddsmatcha_match_id}: {e}")
+
+        # Always return a set (possibly empty) so callers can safely use len()/bool()
+        return starters
 
     except Exception as e:
         print(f"[LINEUPS] Error fetching lineups for match {oddsmatcha_match_id}: {e}")
