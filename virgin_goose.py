@@ -861,10 +861,26 @@ def track_player_name(player_name, site_name, match_id=None, team_name=None, fix
         return
     # Extract team from fixture if not provided
     if team_name is None and fixture:
-        # Try to extract first team from fixture (e.g., "Man Utd v Liverpool" -> "Man Utd")
-        parts = fixture.split(' v ')
-        if len(parts) >= 2:
-            team_name = parts[0].strip()
+        try:
+            # Normalize whitespace and strip control characters
+            norm_fixture = re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]+", "", fixture)).strip()
+            # Split using several common separators (v, vs, -, –, —) case-insensitive
+            parts = re.split(r"\s+(?:v\.?|vs\.?|vs|\-|–|—)\s+", norm_fixture, flags=re.IGNORECASE)
+            if len(parts) >= 2:
+                team_name = parts[0].strip()
+                # Keep cleaned fixture as well
+                fixture = f"{parts[0].strip()} v {parts[1].strip()}"
+        except Exception:
+            # Fallback to simple split if regex fails
+            parts = fixture.split(' v ')
+            if len(parts) >= 2:
+                team_name = parts[0].strip()
+
+    # Normalize empty strings to None
+    if team_name is not None:
+        team_name = team_name.strip() or None
+    if fixture is not None:
+        fixture = fixture.strip() or None
     
     # Delegate to player_names module which handles SQLite/JSON backend
     from player_names import track_player_name as track_player
@@ -998,6 +1014,19 @@ def consolidate_player_tracking():
                 
                 # Sum occurrence counts
                 target_entry['occurrence_count'] += source_entry.get('occurrence_count', 0)
+
+                # Merge team_names and fixtures if present (newer JSON structure)
+                for tk in source_entry.get('team_names', []):
+                    if 'team_names' not in target_entry:
+                        target_entry['team_names'] = []
+                    if tk not in target_entry['team_names']:
+                        target_entry['team_names'].append(tk)
+                for fx in source_entry.get('fixtures', []):
+                    if 'fixtures' not in target_entry:
+                        target_entry['fixtures'] = []
+                    if fx not in target_entry['fixtures']:
+                        target_entry['fixtures'].append(fx)
+
             
             # Track which keys were merged
             merged_keys = [source_key for source_key, _ in source_entries]
@@ -1758,7 +1787,7 @@ def fetch_matches_from_oddsmatcha(next_days=0):
         traceback.print_exc()
         return []
 
-def fetch_lineups(oddsmatcha_match_id):
+def fetch_lineups(oddsmatcha_match_id, fallback_match=None):
     """Fetch starting lineups from OddsMatcha API.
 
     Args:
@@ -1820,6 +1849,38 @@ def fetch_lineups(oddsmatcha_match_id):
         away_team = (data.get('away_lineup') or {}).get('team_name')
         fixture = f"{home_team} v {away_team}" if home_team and away_team else None
 
+        # If fixture is missing, try to populate from provided fallback match (from main loop) first
+        if not fixture and fallback_match:
+            try:
+                mm_home = fallback_match.get('home_team') or (fallback_match.get('mappings') or {}).get('home_team')
+                mm_away = fallback_match.get('away_team') or (fallback_match.get('mappings') or {}).get('away_team')
+                if mm_home and mm_away:
+                    home_team = mm_home
+                    away_team = mm_away
+                    fixture = f"{home_team} v {away_team}"
+                    print(f"[LINEUPS] Using fallback match context to populate fixture for {oddsmatcha_match_id} -> {fixture}")
+            except Exception:
+                pass
+
+        # If still missing, try API
+        if not fixture:
+            try:
+                api = f"https://api.oddsmatcha.uk/matches/{oddsmatcha_match_id}"
+                r = requests.get(api, timeout=10)
+                if r.ok:
+                    match_info = r.json()
+                    # Attempt to extract useful fields
+                    mm_home = match_info.get('home_team') or (match_info.get('home_lineup') or {}).get('team_name')
+                    mm_away = match_info.get('away_team') or (match_info.get('away_lineup') or {}).get('team_name')
+                    if mm_home and mm_away:
+                        home_team = mm_home
+                        away_team = mm_away
+                        fixture = f"{home_team} v {away_team}"
+                        print(f"[LINEUPS] Fallback: populated fixture for {oddsmatcha_match_id} -> {fixture}")
+            except Exception as e:
+                # Non-fatal — continue without fixture
+                pass
+
         for player in home_lineup:
             name = player.get('name', '').strip()
             if name:
@@ -1838,24 +1899,33 @@ def fetch_lineups(oddsmatcha_match_id):
 
         if starters:
             print(f"[LINEUPS] Fetched {len(starters)} confirmed starters for match {oddsmatcha_match_id}")
+
             # Cache confirmed starters so future calls reuse them for this match
             try:
                 cache_dir = os.path.join(BASE_DIR, 'cache', 'lineups')
                 os.makedirs(cache_dir, exist_ok=True)
                 cache_file = os.path.join(cache_dir, f"{oddsmatcha_match_id}.json")
                 with open(cache_file, 'w', encoding='utf-8') as cf:
-                    json.dump({'ts': time.time(), 'starters': sorted(list(starters))}, cf)
+                    json.dump({'ts': time.time(), 'starters': sorted(list(starters)), 'fixture': fixture}, cf)
                 print(f"[LINEUPS] Cached {len(starters)} starters for match {oddsmatcha_match_id}")
             except Exception as e:
                 print(f"[LINEUPS] Failed to cache starters for match {oddsmatcha_match_id}: {e}")
-        else:
-            print(f"[LINEUPS] No starters found for match {oddsmatcha_match_id} (home: {len(home_lineup)}, away: {len(away_lineup)})")
 
-        return starters
+            # Backfill player_tracking rows that were inserted without team/fixture data
+            try:
+                if fixture and home_team:
+                    from player_db import get_db
+                    db = get_db()
+                    updated = db.backfill_fixture_for_match(str(oddsmatcha_match_id), fixture, home_team)
+                    if updated:
+                        print(f"[LINEUPS] Backfilled {updated} player_tracking rows for match {oddsmatcha_match_id}")
+            except Exception as e:
+                print(f"[LINEUPS] Failed to backfill DB rows for match {oddsmatcha_match_id}: {e}")
 
     except Exception as e:
         print(f"[LINEUPS] Error fetching lineups for match {oddsmatcha_match_id}: {e}")
         return set()
+
 
 def is_confirmed_starter(player_name, starters):
     """Check if a player is a confirmed starter using manual mappings first, then fuzzy matching.
@@ -2343,8 +2413,15 @@ def main():
                 cache_dir = os.path.join(BASE_DIR, 'cache')
                 os.makedirs(cache_dir, exist_ok=True)
                 cache_file = os.path.join(cache_dir, 'matches_today.json')
+                # Sanitize matches for JSON serialization (convert datetime objects to ISO strings)
+                serializable_matches = []
+                for m in all_matches_cache:
+                    copy_m = dict(m)
+                    if isinstance(copy_m.get('kickoff_time'), datetime):
+                        copy_m['kickoff_time'] = copy_m['kickoff_time'].isoformat()
+                    serializable_matches.append(copy_m)
                 with open(cache_file, 'w', encoding='utf-8') as cf:
-                    json.dump({'ts': datetime.now(timezone.utc).isoformat(), 'matches': all_matches_cache}, cf, indent=2)
+                    json.dump({'ts': datetime.now(timezone.utc).isoformat(), 'matches': serializable_matches}, cf, indent=2)
                 print(f"[ODDSMATCHA] Saved {len(all_matches_cache)} matches to cache: {cache_file}")
             except Exception as e:
                 print(f"[WARN] Failed to write matches cache: {e}")
@@ -2539,7 +2616,7 @@ def main():
                                         print(f"      - {player_name} ({market_type}): {site_name} @ {lay_odds} (Liquidity: {liquidity_str})")
 
                     # Fetch confirmed starters (lineups) regardless of exchanges
-                    confirmed_starters = fetch_lineups(oddsmatcha_match_id)
+                    confirmed_starters = fetch_lineups(oddsmatcha_match_id, fallback_match=match)
                     print(f"    [DEBUG] Confirmed starters fetched: {len(confirmed_starters)} players - {confirmed_starters}")
                     
                     # Fetch OddsChecker match slug once per match (for ARB alerts)
@@ -2665,18 +2742,28 @@ def main():
                                 
                                 # GOOSE ALERTS (only for Betfair with size and confirmed starters)
                                 if ENABLE_VIRGIN_GOOSE and mtype == betfair.AGS_MARKET_NAME and has_size and lay_size >= GBP_THRESHOLD_GOOSE:
-                                    skip = False
+                                    # Debug output to explain why we might skip triggering a GOOSE alert
+                                    print(f"      [GOOSE DEBUG] {pname}: price={price}, has_size={has_size}, lay_size={lay_size}, GOOSE_MIN_ODDS={GOOSE_MIN_ODDS}, GBP_THRESHOLD_GOOSE={GBP_THRESHOLD_GOOSE}")
+
+                                    skip_reasons = []
                                     if price < GOOSE_MIN_ODDS:
-                                        skip = True
+                                        skip_reasons.append('price_below_min')
                                     virgin_id = mappings.get('virginbet')
                                     if not virgin_id:
-                                        skip = True
+                                        skip_reasons.append('no_virgin_id')
                                     if already_alerted(pname, betfair_id, GOOSE_STATE_FILE):
-                                        skip = True
+                                        skip_reasons.append('already_alerted')
                                     # Only alert if player is a confirmed starter
                                     if confirmed_starters and not is_confirmed_starter(pname, confirmed_starters):
-                                        skip = True
+                                        skip_reasons.append('not_confirmed_starter')
                                         print(f"      [DEBUG] {pname} is NOT a confirmed starter - skipping GOOSE alert")
+
+                                    if skip_reasons:
+                                        print(f"      [GOOSE SKIP] {pname}: reasons={skip_reasons}")
+                                        skip = True
+                                    else:
+                                        skip = False
+
                                     if not skip:
                                                 virgin_markets = getVirginMarkets(virgin_id)
                                                 player_data = find_player_sot_and_ga_ids(virgin_markets, pname)
@@ -2726,14 +2813,29 @@ def main():
                                                             print(f"      [DEBUG] {pname} is NOT a confirmed starter - field NOT added (confirmed_starters={bool(confirmed_starters)})")
                                                                                 
                                                         embed_colour = 0xFF0000  # bright red for true arb
-                                                        #print("ARBING")
-                                                        if DISCORD_GOOSE_CHANNEL_ID:
-                                                            #print("SENDING")
-                                                            send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID,footer=f"{pname} Goal/Assist + SOT",icon=GOOSE_FOOTER_ICON_URL)
-                                                        save_state(pname, betfair_id, GOOSE_STATE_FILE)
+                                                        # Prefer ALERT_CONFIG destinations for Goose alerts
+                                                        sent_count_goose = 0
+                                                        if ALERT_CONFIG and 'goose' in ALERT_CONFIG:
+                                                            try:
+                                                                sent_count_goose = send_alert_to_destinations('goose', title, desc, fields, footer=f"{pname} Goal/Assist + SOT", icon=GOOSE_FOOTER_ICON_URL, rating=rating, config=ALERT_CONFIG)
+                                                            except Exception as e:
+                                                                print(f"[GOOSE] Error sending via ALERT_CONFIG: {e}")
+                                                                sent_count_goose = 0
+
+                                                        # Fallback to legacy single-channel env var
+                                                        if sent_count_goose == 0 and DISCORD_GOOSE_CHANNEL_ID:
+                                                            send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID, footer=f"{pname} Goal/Assist + SOT", icon=GOOSE_FOOTER_ICON_URL)
+                                                            sent_count_goose = 1
+
+                                                        if sent_count_goose > 0:
+                                                            save_state(pname, betfair_id, GOOSE_STATE_FILE)
+                                                            print(f"[GOOSE ALERT] {pname} @ {back_odds} (rating: {rating}%)")
+                                                        else:
+                                                            print(f"[GOOSE] No destinations configured for Goose alerts (checked ALERT_CONFIG['goose'] and DISCORD_GOOSE_CHANNEL_ID)")
                                 
                                 # ARB ALERTS
                                 if ENABLE_ODDSCHECKER and (not has_size or lay_size > GBP_ARB_THRESHOLD):
+                                    print(f"      [ARB DEBUG] {pname}: has_size={has_size}, lay_size={lay_size}, GBP_ARB_THRESHOLD={GBP_ARB_THRESHOLD}")
                                     if mtype == betfair.FGS_MARKET_NAME:
                                         bettype = "First Goalscorer"
                                         label = "FGS"
@@ -2741,18 +2843,22 @@ def main():
                                         bettype = "Anytime Goalscorer"
                                         label = "AGS"
                                     if already_alerted(pname, betfair_id, ARB_STATE_FILE, market=label):
+                                        print(f"      [ARB SKIP] {pname}: already_alerted in ARB_STATE_FILE for market={label}")
                                         continue
                                     
                                     # Use pre-fetched match slug (fetched once per match)
                                     if not match_slug:
+                                        print(f"      [ARB SKIP] {pname}: missing match_slug - OddsChecker link unavailable")
                                         continue
                                     
                                     # BUILD THE JSON FOR THIS BET ['First Goalscorer','Anytime Goalscorer']
                                     betfair_lay_bet = [{"bettype": bettype, "outcome": pname, "lay_odds": price}]
                                     arb_opportunities = get_oddschecker_odds(match_slug, betfair_lay_bet)
+                                    has_arb_dest_config = True if ALERT_CONFIG and 'arb' in ALERT_CONFIG else False
+                                    print(f"      [ARB DEBUG] {pname}: found {len(arb_opportunities) if arb_opportunities else 0} arb_opportunities; arb_config={has_arb_dest_config}, DISCORD_ARB={bool(DISCORD_ARB_CHANNEL_ID)}")
 
                                     # Send separate arbitrage message if configured
-                                    if arb_opportunities and DISCORD_ARB_CHANNEL_ID:
+                                    if arb_opportunities:
                                         # Calculate max OddsChecker odds for title
                                         max_oc_odds = max(arb['odds'] for arb in arb_opportunities) if arb_opportunities else 0
                                         rating_pct = (max_oc_odds / price * 100)
@@ -2761,19 +2867,33 @@ def main():
                                             ("Back Sites", "\n".join([f"{arb['bookie']} @ {arb['odds']:.2f}" for arb in arb_opportunities])),
                                             ("BFEX Link", f"[Open Market](https://www.betfair.com/exchange/plus/football/market/{midid})"),
                                         ]
-                                        
+
                                         # Build description without Confirmed Starter (it's in fields)
                                         desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}"
-                                                
+
                                         # Add confirmed starter field if applicable
                                         if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
                                             arb_fields.append(("Confirmed Starter", "✅"))
-                                        
+
                                         if match_slug:
                                             arb_fields.append(("OC Link", f"[View OC](https://www.oddschecker.com/football/{match_slug})"))
-                                        if DISCORD_ARB_CHANNEL_ID:
+
+                                        # Prefer ALERT_CONFIG destinations for ARB alerts
+                                        sent_count_arb = 0
+                                        if ALERT_CONFIG and 'arb' in ALERT_CONFIG:
+                                            try:
+                                                sent_count_arb = send_alert_to_destinations('arb', arb_title, desc, arb_fields, footer=None, rating=rating_pct, config=ALERT_CONFIG)
+                                            except Exception as e:
+                                                print(f"[ARB] Error sending via ALERT_CONFIG: {e}")
+                                                sent_count_arb = 0
+
+                                        # Fallback to legacy single-channel env var
+                                        if sent_count_arb == 0 and DISCORD_ARB_CHANNEL_ID:
                                             send_discord_embed(arb_title, desc, arb_fields, colour=0xFFB80C, channel_id=DISCORD_ARB_CHANNEL_ID)
-                                        save_state(f"{pname}_{label}", betfair_id, ARB_STATE_FILE)
+                                            sent_count_arb = 1
+
+                                        if sent_count_arb > 0:
+                                            save_state(f"{pname}_{label}", betfair_id, ARB_STATE_FILE)
                                 
                                 # WILLIAM HILL ALERTS
                                 # Reuse the WH client initialized for this match

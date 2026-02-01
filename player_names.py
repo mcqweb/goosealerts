@@ -84,7 +84,8 @@ def track_player_name(player_name: str, site_name: str, match_id: Optional[str] 
         if USE_SQLITE:
             _track_player_sqlite(player_name, site_name, match_id, team_name, fixture, normalize_name)
         else:
-            _track_player_json(player_name, site_name, match_id, normalize_name)
+            # Ensure team_name and fixture are propagated in JSON fallback for compatibility
+            _track_player_json(player_name, site_name, match_id, team_name, fixture, normalize_name)
     except Exception as e:
         print(f"[WARN] Failed to track player name '{player_name}' on {site_name}: {e}")
 
@@ -99,14 +100,21 @@ def add_player_mapping(variant: str, preferred: str) -> None:
     from virgin_goose import normalize_name
     
     variant_norm = normalize_name(variant)
+    preferred_norm = normalize_name(preferred)
     
     if USE_SQLITE:
         _get_db().add_mapping(variant_norm, preferred)
+        # Also merge any existing tracking rows that used the old key into the new preferred key
+        try:
+            merged = _get_db().merge_player_key(variant_norm, preferred_norm)
+            if merged:
+                print(f"[PLAYER_DB] Merged {merged} tracking rows from '{variant_norm}' into '{preferred_norm}'")
+        except Exception as e:
+            print(f"[PLAYER_DB] Error merging tracking rows for mapping {variant_norm} -> {preferred_norm}: {e}")
     else:
         mappings = _load_mappings_from_json()
         mappings[variant_norm] = preferred
         _save_mappings_to_json(mappings)
-
 
 # ========= INTERNAL: SQLite Implementation =========
 
@@ -149,8 +157,13 @@ def _save_mappings_to_json(mappings: Dict[str, str]) -> None:
         json.dump(mappings, f, indent=2)
 
 
-def _track_player_json(player_name: str, site_name: str, match_id: Optional[str], normalize_name_func):
-    """Track player using JSON files (legacy)."""
+def _track_player_json(player_name: str, site_name: str, match_id: Optional[str], team_name: Optional[str], fixture: Optional[str], normalize_name_func):
+    """Track player using JSON files (legacy).
+
+    This JSON fallback now records `team_name` and `fixture` (lists) on each tracking
+    entry so callers that only have JSON storage will still retain contextual data
+    collected from lineups and match contexts.
+    """
     # Ensure data directory exists
     os.makedirs(os.path.dirname(PLAYER_TRACKING_FILE), exist_ok=True)
     
@@ -174,6 +187,8 @@ def _track_player_json(player_name: str, site_name: str, match_id: Optional[str]
     if tracking_key not in tracking_data:
         tracking_data[tracking_key] = {
             'raw_names': {},
+            'team_names': [],   # List of observed team names
+            'fixtures': [],     # List of observed fixtures
             'first_seen': datetime.now(timezone.utc).isoformat(),
             'last_seen': datetime.now(timezone.utc).isoformat(),
             'occurrence_count': 0
@@ -188,6 +203,18 @@ def _track_player_json(player_name: str, site_name: str, match_id: Optional[str]
     # Add raw name if not already tracked for this site
     if player_name not in entry['raw_names'][site_name]:
         entry['raw_names'][site_name].append(player_name)
+
+    # Record team_name and fixture when available
+    try:
+        if team_name:
+            if team_name not in entry.get('team_names', []):
+                entry.setdefault('team_names', []).append(team_name)
+        if fixture:
+            if fixture not in entry.get('fixtures', []):
+                entry.setdefault('fixtures', []).append(fixture)
+    except Exception:
+        # Be defensive - don't fail tracking on odd data
+        pass
     
     # Update metadata
     entry['last_seen'] = datetime.now(timezone.utc).isoformat()

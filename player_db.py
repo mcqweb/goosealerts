@@ -194,7 +194,12 @@ class PlayerDatabase:
             Always pass team_name to avoid creating separate entries for same player.
         """
         now = datetime.now(timezone.utc).isoformat()
-        
+        # Coerce empty strings to None so the DB stores NULL (consistently representing missing data)
+        if isinstance(team_name, str) and team_name.strip() == "":
+            team_name = None
+        if isinstance(fixture, str) and fixture.strip() == "":
+            fixture = None
+
         with self._get_connection() as conn:
             # UPSERT tracking record - update if exists, insert if new
             # The unique constraint is on (player_key, site_name, team_name, fixture)
@@ -258,14 +263,63 @@ class PlayerDatabase:
             """)
             
             return {
-                row['player_key']: {
-                    'first_seen': row['first_seen'],
-                    'last_seen': row['last_seen'],
-                    'occurrence_count': row['occurrence_count']
-                }
-                for row in cursor
-            }
-    
+                row['player_key']: {'first_seen': row['first_seen'], 'last_seen': row['last_seen'], 'occurrence_count': row['occurrence_count']} for row in cursor}
+
+    def merge_player_key(self, source_key: str, target_key: str) -> int:
+        """Merge tracking rows from source_key into target_key.
+
+        For each unique (site_name, team_name, fixture) sighting under source_key,
+        if a corresponding row for target_key exists, update its seen_at to the newer
+        timestamp; otherwise update the row to set player_key to target_key.
+
+        Returns the number of rows affected.
+        """
+        affected = 0
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            # Fetch all distinct sightings for source_key
+            cur.execute("""
+                SELECT id, raw_name, site_name, match_id, team_name, fixture, seen_at
+                FROM player_tracking
+                WHERE player_key = ?
+            """, (source_key,))
+            rows = cur.fetchall()
+
+            for row in rows:
+                # Check for existing target row with same site/team/fixture
+                cur.execute("""
+                    SELECT id, seen_at FROM player_tracking
+                    WHERE player_key = ? AND site_name = ? AND (team_name IS ? OR team_name = ?) AND (fixture IS ? OR fixture = ?)
+                    LIMIT 1
+                """, (target_key, row['site_name'], row['team_name'], row['team_name'], row['fixture'], row['fixture']))
+                existing = cur.fetchone()
+                if existing:
+                    # Update seen_at to newest
+                    existing_seen = existing['seen_at']
+                    if existing_seen is None or row['seen_at'] > existing_seen:
+                        cur.execute("UPDATE player_tracking SET seen_at = ? WHERE id = ?", (row['seen_at'], existing['id']))
+                    # Delete the source row to avoid duplicates
+                    cur.execute("DELETE FROM player_tracking WHERE id = ?", (row['id'],))
+                    affected += 1
+                else:
+                    # Re-key the source row to the target_key
+                    cur.execute("UPDATE player_tracking SET player_key = ? WHERE id = ?", (target_key, row['id']))
+                    affected += 1
+
+            # Recalculate stats for target_key and source_key
+            def refresh_stats(key):
+                cur.execute("SELECT MIN(seen_at) as first_seen, MAX(seen_at) as last_seen, COUNT(*) as cnt FROM player_tracking WHERE player_key = ?", (key,))
+                res = cur.fetchone()
+                if res['cnt'] > 0:
+                    cur.execute("INSERT OR REPLACE INTO player_stats (player_key, first_seen, last_seen, occurrence_count) VALUES (?, ?, ?, ?)", (key, res['first_seen'], res['last_seen'], res['cnt']))
+                else:
+                    cur.execute("DELETE FROM player_stats WHERE player_key = ?", (key,))
+
+            refresh_stats(target_key)
+            refresh_stats(source_key)
+            conn.commit()
+        return affected
+
     def get_player_raw_names(self, player_key: str) -> Dict[str, List[str]]:
         """Get all raw names seen for a player, grouped by site.
         
@@ -355,6 +409,28 @@ class PlayerDatabase:
         
         # They have team data but no overlap - conflicting!
         return True
+
+    def backfill_fixture_for_match(self, match_id: str, fixture: str, home_team: Optional[str] = None) -> int:
+        """Backfill fixture and team_name for 'lineup' sightings with a given match_id.
+
+        Args:
+            match_id: The match identifier to match on
+            fixture: Fixture string to write (e.g., 'Home v Away')
+            home_team: Optional home team name to populate in team_name column
+
+        Returns:
+            Number of rows updated
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE player_tracking
+                SET fixture = ?, team_name = COALESCE(team_name, ?)
+                WHERE match_id = ? AND site_name = 'lineup' AND fixture IS NULL
+            """, (fixture, home_team, match_id))
+            updated = cursor.rowcount
+            conn.commit()
+            return updated
     
     # ========= SKIPPED PAIRS OPERATIONS =========
     
@@ -419,6 +495,7 @@ class PlayerDatabase:
     
     def import_from_json(self, mappings_file: str, tracking_file: str, 
                         skipped_file: Optional[str] = None) -> Dict[str, int]:
+        # Existing method continues...
         """Import data from legacy JSON files.
         
         Args:

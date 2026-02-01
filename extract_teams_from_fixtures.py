@@ -34,16 +34,30 @@ rows = cursor.fetchall()
 updated = 0
 for row in rows:
     fixture = row['fixture']
-    # Extract first team from "Team A v Team B" format
-    parts = fixture.split(' v ')
-    if len(parts) >= 2:
-        team_name = parts[0].strip()
-        cursor.execute("""
-            UPDATE player_tracking 
-            SET team_name = ? 
-            WHERE id = ?
-        """, (team_name, row['id']))
-        updated += 1
+    # Try to extract first team using flexible separators
+    import re
+    try:
+        norm_fixture = re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]+", "", fixture)).strip()
+        parts = re.split(r"\s+(?:v\.?|vs\.?|vs|\-|–|—)\s+", norm_fixture, flags=re.IGNORECASE)
+        if len(parts) >= 2:
+            team_name = parts[0].strip()
+            cursor.execute("""
+                UPDATE player_tracking 
+                SET team_name = ? 
+                WHERE id = ?
+            """, (team_name, row['id']))
+            updated += 1
+    except Exception:
+        # Fallback to basic split
+        parts = fixture.split(' v ')
+        if len(parts) >= 2:
+            team_name = parts[0].strip()
+            cursor.execute("""
+                UPDATE player_tracking 
+                SET team_name = ? 
+                WHERE id = ?
+            """, (team_name, row['id']))
+            updated += 1
 
 conn.commit()
 print(f"✓ Updated {updated} entries with team names extracted from fixture")
