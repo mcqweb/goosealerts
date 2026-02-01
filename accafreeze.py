@@ -444,7 +444,7 @@ def send_discord_alert(opportunity, sites, is_realert=False):
     # Build embed
     title_prefix = "🔄 " if is_realert else ""
     embed = {
-        "title": f"{title_prefix}{opportunity['outcome']} ({opportunity['rating']:.0f}%)",
+        "title": f"{title_prefix}{opportunity['outcome']} ({opportunity['back_odds']} / {opportunity['lay_odds']})",
         "description": f"**{opportunity['home_team']} v {opportunity['away_team']}**\n{opportunity['competition']}\n{opportunity['kickoff_display']}",
         "color": 0xFFFFFF,  # White
         "fields": [
@@ -541,8 +541,19 @@ def build_summary_embed(opportunities, include_seen=False):
     #    description_lines.append("(Includes already seen alerts)")
     description_lines.append("")
 
-    for i, item in enumerate(opportunities, 1):
-        opp, site, is_realert = item
+    # Sort opportunities earliest kickoff first. Support two shapes: tuples (opp, site, is_realert) or dicts
+    if opportunities and isinstance(opportunities[0], tuple):
+        sorted_ops = sorted(opportunities, key=lambda it: it[0].get('hours_until_ko', float('inf')))
+    else:
+        sorted_ops = sorted(opportunities, key=lambda opp: opp.get('hours_until_ko', float('inf')))
+
+    for i, item in enumerate(sorted_ops, 1):
+        if isinstance(item, tuple):
+            opp, site, is_realert = item
+        else:
+            opp = item
+            site = None
+            is_realert = False
         #kind = "🔄 Re-alert" if is_realert else "✅ New"
         line = (f"{opp['outcome']} ({opp['rating']:.0f}%)\n{opp['home_team']} v {opp['away_team']} | KO: {opp['kickoff_display']}\n"
                 f"Back {opp['back_odds']} / Lay {opp['lay_odds']}\n")
@@ -938,8 +949,9 @@ def main():
     print(f"\n[CHECK] Checking Sky Bet odds on OddsChecker...")
     opportunities = check_opportunities(qualifying=qualifying, sites=enabled_sites, seen_matches=seen_matches, debug=bool(debug))
     
-    # Display summary
-    display_summary(opportunities)
+    # Display summary (ordered by earliest kickoff first)
+    opportunities_sorted = sorted(opportunities, key=lambda o: o.get('hours_until_ko', float('inf')))
+    display_summary(opportunities_sorted)
 
     # If any site uses per-site summary_mode, aggregate and send per-site summaries using each site's settings
     any_summary = any(s.get('summary_mode', False) for s in enabled_sites)
@@ -1008,6 +1020,8 @@ def main():
             if not allowed:
                 continue
 
+            # Sort items so earliest kickoff is first
+            items.sort(key=lambda it: it[0].get('hours_until_ko', float('inf')))
             print(f"[SUMMARY] Sending summary to {site.get('name', 'Unknown')} ({len(items)} item(s))")
             if send_discord_summary(site, items, include_seen=bool(site.get('summary_send_seen', False))):
                 summary_state[key] = now_utc.isoformat()

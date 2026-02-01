@@ -579,20 +579,14 @@ def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=N
     
     # --- 2. Add the footer dictionary if requested ---
     if footer:
-        # 'footer' is now the dictionary key for the footer object
-        # 'text' and 'icon_url' are keys within the footer object
+        # Always attach the footer text for destinations that provide it.
+        embed["footer"] = {
+            "text": footer
+        }
+        # Optionally include an icon in the footer when provided.
         if icon:
-            embed["footer"] = {
-                "text": footer, # Use the string passed to the function
-                "icon_url": icon
-            }
-        elif channel_id == DISCORD_WH_CHANNEL_ID or channel_id == DISCORD_WH_SMARKETS_CHANNEL_ID:
-            embed["footer"] = {
-                "text": footer
-                
-            }
+            embed["footer"]["icon_url"] = icon
 
-    
     # --- 3. Add the timestamp if a footer wasn't provided (as per your original logic) ---
     else:
         # Note: Discord recommends using 'timestamp' as a top-level key for the embed
@@ -2560,12 +2554,22 @@ def main():
                     wh_client = None
                     wh_match_id = mappings.get('williamhill')
                     wh_offer_checked = False
+                    wh_offer_id = None
+                    wh_boost_multiplier = 1.0
                     
                     # Only fetch WH prices if we have lineup data
                     if ENABLE_WILLIAMHILL and wh_match_id and confirmed_starters:
-                        # Check if match is in the WH offer
-                        if is_match_in_wh_offer(wh_match_id):
+                        # Prefer offer 13 (50%) fallback to offer 1 (25%)
+                        if is_match_in_wh_offer(wh_match_id, offer_id=13):
                             wh_offer_checked = True
+                            wh_offer_id = 13
+                            wh_boost_multiplier = 1.5
+                        elif is_match_in_wh_offer(wh_match_id, offer_id=1):
+                            wh_offer_checked = True
+                            wh_offer_id = 1
+                            wh_boost_multiplier = 1.25
+
+                        if wh_offer_checked:
                             try:
                                 from willhill_betbuilder import BetBuilderClient
                                 wh_client = BetBuilderClient()
@@ -2573,7 +2577,7 @@ def main():
                                     print(f"Failed to load WH event {wh_match_id}")
                                     wh_client = None
                                 else:
-                                    print(f"[WH] Loaded event {wh_match_id} for reuse across players")
+                                    print(f"[WH] Loaded event {wh_match_id} for reuse across players (offer_id={wh_offer_id}, boost={int((wh_boost_multiplier-1)*100)}%)")
                                     
                                     # Fetch and track base WH goalscorer odds
                                     base_odds = get_wh_base_goalscorer_odds(wh_client, wh_match_id)
@@ -2585,7 +2589,7 @@ def main():
                                 print(f"Error loading WH client: {e}")
                                 wh_client = None
                         else:
-                            print(f"Match {wh_match_id} not in WH offer; skipping all WH checks for this match")
+                            print(f"Match {wh_match_id} not in WH offer (checked 13 and 1); skipping all WH checks for this match")
                     else:
                         if not wh_match_id:
                             print(f"No WH mapping for Betfair {betfair_id}; skipping all WH checks for this match")
@@ -2861,9 +2865,12 @@ def main():
                                             boosted_odds = wh_odds
                                             
                                             if float(wh_odds) >= 4:
-                                                # Boosting odds by 25%
-                                                boosted_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
-                                                print(f"[WH] {pname} {label}: WH odds {original_wh_odds} boosted to {boosted_odds} vs Lay {price}")
+                                                # Boosting odds by configured percentage
+                                                try:
+                                                    boosted_odds = round(((float(wh_odds)-1) * float(wh_boost_multiplier)) + 1, 2)
+                                                except Exception:
+                                                    boosted_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
+                                                print(f"[WH] {pname} {label}: WH odds {original_wh_odds} boosted to {boosted_odds} (multiplier {wh_boost_multiplier}) vs Lay {price}")
                                             else:
                                                 print(f"[WH] {pname} {label}: WH @ {wh_odds} vs Lay @ {price}")
                                             
@@ -2908,9 +2915,9 @@ def main():
                                                         fields.append(("Confirmed Starter", "✅"))
                                                     #build footer
                                                     if label == "FGS":
-                                                        footer_text = f"{pname} FGS + AGS + Over 0.5 Goals"
+                                                        footer_text = f"{pname} FGS + AGS + Over 0.5 Goals ({int((wh_boost_multiplier-1)*100)}% WH Boost)"
                                                     elif label == "AGS":
-                                                        footer_text = f"{pname} AGS + G/A + Over 0.5 Goals"
+                                                        footer_text = f"{pname} AGS + G/A + Over 0.5 Goals ({int((wh_boost_multiplier-1)*100)}% WH Boost)"
                                                     # Prefer sending via ALERT_CONFIG destinations if configured
                                                     sent_count = 0
                                                     if ALERT_CONFIG and 'williamhill' in ALERT_CONFIG:
@@ -3248,7 +3255,10 @@ def main():
                                             boosted_odds = wh_odds
                                             
                                             if float(wh_odds) >= 4:
-                                                boosted_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
+                                                try:
+                                                    boosted_odds = round(((float(wh_odds)-1) * float(wh_boost_multiplier)) + 1, 2)
+                                                except Exception:
+                                                    boosted_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
                                             
                                             if boosted_odds >= lay_price:
                                                 rating = round(boosted_odds / lay_price * 100, 2)
@@ -3354,7 +3364,10 @@ def main():
                                             boosted_odds = wh_odds
                                             
                                             if float(wh_odds) >= 4:
-                                                boosted_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
+                                                try:
+                                                    boosted_odds = round(((float(wh_odds)-1) * float(wh_boost_multiplier)) + 1, 2)
+                                                except Exception:
+                                                    boosted_odds = round(((float(wh_odds)-1) * 1.25) + 1, 2)
                                             
                                             if boosted_odds >= lay_price:
                                                 rating = round(boosted_odds / lay_price * 100, 2)
@@ -3362,7 +3375,7 @@ def main():
                                                 desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}"
                                                 fields = [("Confirmed Starter", "✅")]
                                                 footer_text = f"{player_name} Over 0.5 Goals + AGS + Hat-trick"
-                                                
+                                                 
                                                 if DISCORD_WH_CHANNEL_ID:
                                                     send_discord_embed(title, desc, fields, colour=0x00143C, 
                                                                      channel_id=DISCORD_WH_CHANNEL_ID, footer=footer_text)
