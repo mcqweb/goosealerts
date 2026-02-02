@@ -3167,54 +3167,54 @@ def main():
                                                             smarkets_liquidity = exchange['lay_size']
                                                             break
 
-                                                    if not DISCORD_WH_SMARKETS_CHANNEL_ID:
-                                                        alert_block_reasons.append('no_smarkets_channel')
+                                                    # Smarkets-only alert handling
+                                                    # Check if this has already been alerted (single check regardless of destination method)
+                                                    if already_alerted(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE):
+                                                        alert_block_reasons.append('already_alerted_smarkets')
                                                     else:
-                                                        if already_alerted(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE):
-                                                            alert_block_reasons.append('already_alerted_smarkets')
-                                                        else:
-                                                            if has_smarkets and smarkets_price is not None and boosted_odds >= smarkets_price:
-                                                                # Build Smarkets-only description (no Betfair mention)
-                                                                smarkets_lay_text = f"Smarkets @ {smarkets_price}"
-                                                                if smarkets_liquidity:
-                                                                    smarkets_lay_text += f" (£{int(smarkets_liquidity)})"
-                                                                
-                                                                rating_sm = round(boosted_odds / smarkets_price * 100, 2)
-                                                                title_sm = f"{pname} - {label} - {boosted_odds}/{smarkets_price} ({rating_sm}%)"
-                                                                desc_sm = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Price:** {smarkets_lay_text}"
-                                                                
-                                                                fields_sm = [("Confirmed Starter", "✅")]
-                                                                
-                                                                # Use same footer as main WH alert (safe fallback)
-                                                                footer_text_sm = locals().get('footer_text', f"{pname} {label}")
-                                                                
-                                                                # Prefer ALERT_CONFIG destinations for Smarkets-only alerts
-                                                                sent_count_sm = 0
-                                                                if ALERT_CONFIG and 'williamhill' in ALERT_CONFIG:
-                                                                    try:
-                                                                        sent_count_sm = send_alert_to_destinations('williamhill', title_sm, desc_sm, fields_sm, footer=footer_text_sm, rating=rating_sm, is_smarkets_only=True, config=ALERT_CONFIG)
-                                                                    except Exception as e:
-                                                                        print(f"[WH] Error sending Smarkets-only via ALERT_CONFIG: {e}")
-                                                                        sent_count_sm = 0
+                                                        if has_smarkets and smarkets_price is not None and boosted_odds >= smarkets_price:
+                                                            # Build Smarkets-only description (no Betfair mention)
+                                                            smarkets_lay_text = f"Smarkets @ {smarkets_price}"
+                                                            if smarkets_liquidity:
+                                                                smarkets_lay_text += f" (£{int(smarkets_liquidity)})"
 
-                                                                # Fallback to legacy env var
-                                                                if sent_count_sm == 0 and DISCORD_WH_SMARKETS_CHANNEL_ID:
+                                                            rating_sm = round(boosted_odds / smarkets_price * 100, 2)
+                                                            title_sm = f"{pname} - {label} - {boosted_odds}/{smarkets_price} ({rating_sm}%)"
+                                                            desc_sm = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Price:** {smarkets_lay_text}"
+
+                                                            fields_sm = [("Confirmed Starter", "✅")]
+
+                                                            # Use same footer as main WH alert (safe fallback)
+                                                            footer_text_sm = locals().get('footer_text', f"{pname} {label}")
+
+                                                            # Prefer ALERT_CONFIG destinations for Smarkets-only alerts
+                                                            sent_count_sm = 0
+                                                            if ALERT_CONFIG and 'williamhill' in ALERT_CONFIG:
+                                                                try:
+                                                                    sent_count_sm = send_alert_to_destinations('williamhill', title_sm, desc_sm, fields_sm, footer=footer_text_sm, rating=rating_sm, is_smarkets_only=True, config=ALERT_CONFIG)
+                                                                except Exception as e:
+                                                                    print(f"[WH] Error sending Smarkets-only via ALERT_CONFIG: {e}")
+                                                                    sent_count_sm = 0
+
+                                                            # Fallback to legacy env var channel only if ALERT_CONFIG didn't send anything
+                                                            if sent_count_sm == 0 and DISCORD_WH_SMARKETS_CHANNEL_ID:
+                                                                try:
                                                                     send_discord_embed(title_sm, desc_sm, fields_sm, colour=0x00143C, channel_id=DISCORD_WH_SMARKETS_CHANNEL_ID, footer=footer_text_sm, bot_token=DISCORD_BOT_TOKEN_SMARKETS)
                                                                     sent_count_sm = 1
+                                                                except Exception as e:
+                                                                    print(f"[WH] Error sending Smarkets-only to legacy channel: {e}")
 
-                                                                if sent_count_sm > 0:
-                                                                    save_state(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE)
-                                                                    print(f"[WH SMARKETS ALERT] {pname} {label} @ {boosted_odds} vs Smarkets @ {smarkets_price} (rating: {rating_sm}%)")
-                                                                    alert_sent = True
-                                                                else:
-                                                                    alert_block_reasons.append('no_smarkets_destinations')
+                                                            if sent_count_sm > 0:
+                                                                save_state(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE)
+                                                                print(f"[WH SMARKETS ALERT] {pname} {label} @ {boosted_odds} vs Smarkets @ {smarkets_price} (rating: {rating_sm}%)")
+                                                                alert_sent = True
                                                             else:
-                                                                if not has_smarkets:
-                                                                    alert_block_reasons.append('no_smarkets_price')
-                                                                elif smarkets_price is None:
-                                                                    alert_block_reasons.append('no_smarkets_price')
-                                                                elif boosted_odds < smarkets_price:
-                                                                    alert_block_reasons.append('smarkets_odds_below')
+                                                                alert_block_reasons.append('no_smarkets_destinations')
+                                                        else:
+                                                            if not has_smarkets or smarkets_price is None:
+                                                                alert_block_reasons.append('no_smarkets_price')
+                                                            elif boosted_odds < smarkets_price:
+                                                                alert_block_reasons.append('smarkets_odds_below')
                                             # Final reporting when no alerts were sent
                                             if not alert_sent:
                                                 reasons = ', '.join(sorted(set(alert_block_reasons))) if alert_block_reasons else 'unknown'
