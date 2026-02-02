@@ -217,7 +217,59 @@ class KwiffClient:
             return response[0]  # First item contains the data
         
         return response
-    
+
+    async def get_combo_odds(self, event_id: int, outcome_ids: list, source: int = 2) -> dict | None:
+        """
+        Request combo odds (bet builder) for a set of outcome IDs.
+
+        Args:
+            event_id: Kwiff event ID
+            outcome_ids: List of outcome IDs to combine
+            source: Source ID to use in the payload (default: 2)
+
+        Returns:
+            Dict containing parsed odds info: {'odds': float, 'fractionalOdds': str, 'raw': dict}
+            or None if not available
+        """
+        payload = {
+            "betBuilderOutcomeGroups": [
+                {
+                    "source": source,
+                    "outcomeIds": outcome_ids,
+                    "eventId": event_id,
+                }
+            ]
+        }
+
+        response = await self.send_command("ticket:odds:get", payload)
+
+        # Normalize response into a dict that contains the payload data
+        data = None
+        if response is None:
+            return None
+        if isinstance(response, list) and len(response) > 0:
+            data = response[0]
+        elif isinstance(response, dict):
+            data = response
+        else:
+            return None
+
+        # Drill down to betBuilderOutcomeGroups
+        groups = None
+        if isinstance(data, dict):
+            if "data" in data and isinstance(data["data"], dict):
+                groups = data["data"].get("betBuilderOutcomeGroups")
+            groups = groups or data.get("betBuilderOutcomeGroups")
+
+        if not groups or not isinstance(groups, list) or len(groups) == 0:
+            return None
+
+        group = groups[0]
+        odds = group.get("odds")
+        fractional = group.get("fractionalOdds")
+
+        return {"odds": odds, "fractionalOdds": fractional, "raw": data}
+
     async def __aenter__(self):
         """Async context manager entry."""
         if await self.connect():

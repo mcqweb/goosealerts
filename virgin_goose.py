@@ -38,6 +38,10 @@ WH_ODDS_TRACKING_DIR = os.path.join(BASE_DIR, 'wh_odds_tracking')
 os.makedirs(WH_ODDS_TRACKING_DIR, exist_ok=True)
 RUN_COUNTER_FILE = os.path.join(WH_ODDS_TRACKING_DIR, 'run_counter.json')
 
+# Kwiff combo tracking directory
+KWIFF_ODDS_TRACKING_DIR = os.path.join(BASE_DIR, 'kwiff_odds_tracking')
+os.makedirs(KWIFF_ODDS_TRACKING_DIR, exist_ok=True)
+
 def load_run_counter():
     """Load the persistent run counter from disk."""
     try:
@@ -121,6 +125,45 @@ def track_wh_odds(match_id, match_name, player_name, market_type, wh_odds, boost
         
     except Exception as e:
         print(f"[WARN] Failed to track WH odds: {e}")
+
+
+def track_kwiff_combo(match_id, match_name, player_name, event_id, outcome_ids, odds, fractional=None, raw=None, markets=None, run_number=None):
+    """Track Kwiff combo requests and responses per event (match).
+
+    Stores a per-event JSON file with timestamped combo records.
+    """
+    try:
+        tracking_file = os.path.join(KWIFF_ODDS_TRACKING_DIR, f"{match_id}.json")
+        if os.path.exists(tracking_file):
+            with open(tracking_file, 'r', encoding='utf-8') as f:
+                tracking_data = json.load(f)
+        else:
+            tracking_data = {'event_id': event_id, 'match_id': match_id, 'match_name': match_name, 'records': []}
+
+        record = {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'player_name': player_name,
+            'event_id': event_id,
+            'outcome_ids': outcome_ids,
+            'odds': odds,
+            'fractionalOdds': fractional,
+        }
+        if raw:
+            record['raw'] = raw
+        if markets:
+            record['markets'] = markets
+        if run_number is not None:
+            record['run_number'] = run_number
+
+        tracking_data['records'].append(record)
+
+        tmp_file = tracking_file + '.tmp'
+        with open(tmp_file, 'w', encoding='utf-8') as f:
+            json.dump(tracking_data, f, indent=2)
+        os.replace(tmp_file, tracking_file)
+
+    except Exception as e:
+        print(f"[WARN] Failed to track Kwiff combo: {e}")
 
 def track_wh_base_odds(match_id, match_name, base_odds_data, run_number=None):
     """
@@ -500,6 +543,10 @@ def load_alert_config():
                         except Exception:
                             print(f"[WARN] Invalid color format in '{alert_type}': {dest['color']}")
                             dest['color'] = 0x3AA3E3  # Default color
+
+                # Ensure wait_for_lineups flag exists (default True)
+                if 'wait_for_lineups' not in dest:
+                    dest['wait_for_lineups'] = True
         
         print(f"[CONFIG] Loaded alert configuration from {ALERT_CONFIG_FILE}")
 
@@ -529,6 +576,7 @@ def load_alert_config():
         traceback.print_exc()
         return None
 
+
 def get_min_threshold(alert_type, config):
     """Get the minimum threshold for an alert type to use for initial filtering.
     
@@ -550,6 +598,33 @@ def get_min_threshold(alert_type, config):
                 min_thresh = thresh
     
     return min_thresh
+
+
+def destination_allows_lineups(dest: dict, confirmed_starters_available: bool, player_confirmed: bool) -> bool:
+    """Return True if given destination allows alerts given lineup state.
+
+    Logic:
+    - If destination sets 'wait_for_lineups' == False -> allow
+    - Else (default True) require both confirmed_starters_available and player_confirmed
+    """
+    wait = dest.get('wait_for_lineups', True)
+    if not wait:
+        return True
+    return confirmed_starters_available and player_confirmed
+
+
+def get_kwiff_id_for_match(betfair_market_id):
+    """Return a Kwiff event ID for a given Betfair market ID, or None."""
+    if not ENABLE_KWIFF:
+        return None
+    try:
+        mappings = get_kwiff_event_mappings()
+        for kwiff_id, data in mappings.items():
+            if data.get('betfair_id') == str(betfair_market_id):
+                return kwiff_id
+    except Exception as e:
+        print(f"[KWIFF] Error checking availability: {e}")
+    return None
 
 # Load alert configuration at startup
 ALERT_CONFIG = load_alert_config()
@@ -648,7 +723,7 @@ def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=N
         print(f"[WARN] Channel {channel_id} post failed: {e}")
 
 def send_alert_to_destinations(alert_type, title, description, fields, footer=None, icon=None, rating=None, 
-                               offer_id=None, is_smarkets_only=False, config=None):
+                               offer_id=None, is_smarkets_only=False, config=None, confirmed_starters_available=True, player_confirmed=True):
     """Send an alert to multiple configured destinations based on their criteria.
     
     Args:
@@ -662,6 +737,8 @@ def send_alert_to_destinations(alert_type, title, description, fields, footer=No
         offer_id: Optional offer ID for special offer handling
         is_smarkets_only: Whether this is a Smarkets-only alert
         config: Alert configuration (uses global ALERT_CONFIG if not provided)
+        confirmed_starters_available: Whether confirmed starters data is available for this match
+        player_confirmed: Whether the player is included in confirmed starters (if available)
     
     Returns:
         Number of destinations the alert was sent to
@@ -679,6 +756,11 @@ def send_alert_to_destinations(alert_type, title, description, fields, footer=No
     for dest in destinations:
         # Check if destination is enabled
         if not dest.get('enabled', True):
+            continue
+        
+        # Enforce per-destination lineup requirements
+        if not destination_allows_lineups(dest, confirmed_starters_available, player_confirmed):
+            # Destination requires lineups and either no confirmed starters available or player not confirmed
             continue
         
         # Skip Smarkets-only destinations if this isn't a Smarkets alert
@@ -2655,6 +2737,14 @@ def main():
             print(f"  Betfair: {betfair_id}")
             print(f"  Virgin: {mappings.get('virginbet', 'N/A')}")
             print(f"  WH: {mappings.get('williamhill', 'N/A')}")
+            # Prefer explicit Kwiff mapping in the match 'mappings' (if present), else check global Kwiff map
+            kwiff_local = mappings.get('kwiff')
+            try:
+                if not kwiff_local and betfair_id:
+                    kwiff_local = get_kwiff_id_for_match(betfair_id)
+            except Exception:
+                kwiff_local = kwiff_local or 'N/A'
+            print(f"  Kwiff: {kwiff_local if kwiff_local else 'N/A'}")
             if ENABLE_LADBROKES:
                 print(f"  Ladbrokes: {mappings.get('ladbrokes', 'N/A')}")
             
@@ -2791,7 +2881,36 @@ def main():
                             except Exception as e:
                                 print(f"    Error fetching market {midid}: {e}")
                                 betfair_odds = []
-                            
+
+                            # Show any Betfair player markets we found (filter out placeholders > 999)
+                            if betfair_odds:
+                                # Try to display a friendly market name where available
+                                market_disp = supported.get(mtype, {}).get('market_name') or ( 'First Goalscorer' if mtype == betfair.FGS_MARKET_NAME else 'Anytime Goalscorer')
+                                # Filter out placeholder lays (e.g., 1000.0)
+                                filtered = []
+                                for bo in betfair_odds:
+                                    try:
+                                        podds_val = float(bo.get('odds') or 0)
+                                    except Exception:
+                                        continue
+                                    if podds_val > 999:
+                                        continue
+                                    filtered.append(bo)
+
+                                print(f"    [BETFAIR] Found {len(filtered)} player(s) in {market_disp} ({midid}):")
+                                for bo in filtered:
+                                    try:
+                                        pname = bo.get('outcome') or bo.get('outcome_name') or ''
+                                        podds = bo.get('odds')
+                                        psize = bo.get('size') or 0
+                                        try:
+                                            psize_int = int(psize)
+                                        except Exception:
+                                            psize_int = 0
+                                        print(f"      - {pname}: lay {podds} (size £{psize_int})")
+                                    except Exception:
+                                        pass
+
                             # Combine Betfair and exchange odds
                             market_type = 'First Goalscorer' if mtype == betfair.FGS_MARKET_NAME else 'Anytime Goalscorer'
                             all_odds = combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type, match_data=match)
@@ -2879,6 +2998,60 @@ def main():
                                                         else:
                                                             print('Combo Odds (raw):', combo_odds)
                                                         print(f"Player: {player_data['name']} | Back Odds: {back_odds} | Lay Odds: {price}")
+
+                                                        # If AGS (Goose) check succeeded, also attempt Kwiff combo lookup
+                                                        try:
+                                                            if ENABLE_KWIFF:
+                                                                kwiff_id = get_kwiff_id_for_match(betfair_id)
+                                                                if kwiff_id:
+                                                                    print(f"[KWIFF] Attempting Kwiff combo build for {player_data['name']} on Kwiff event {kwiff_id}")
+                                                                    try:
+                                                                        from kwiff import build_combo_data_sync
+                                                                        kw_combo = build_combo_data_sync(str(kwiff_id), player_data['name'])
+                                                                    except Exception as e:
+                                                                        kw_combo = None
+                                                                        print(f"[KWIFF] Error building combo: {e}")
+
+                                                                    if kw_combo:
+                                                                        try:
+                                                                            track_kwiff_combo(match_id=kwiff_id, match_name=mname, player_name=player_data['name'], event_id=kw_combo.get('event_id'), outcome_ids=kw_combo.get('outcome_ids', []), odds=kw_combo.get('odds'), fractional=kw_combo.get('fractionalOdds'), raw=kw_combo.get('raw'), markets=kw_combo.get('markets'), run_number=run_number)
+                                                                        except Exception as e:
+                                                                            print(f"[KWIFF] Warning: failed to track combo: {e}")
+
+                                                                        try:
+                                                                            lay_price = float(price)
+                                                                            kwiff_odds = float(kw_combo.get('odds')) if kw_combo.get('odds') is not None else None
+                                                                        except Exception:
+                                                                            lay_price = None
+                                                                            kwiff_odds = None
+
+                                                                        if kwiff_odds and lay_price and lay_price > 0:
+                                                                            rating_pct = round((kwiff_odds / lay_price) * 100, 2)
+                                                                            print(f"[KWIFF] Combo odds {kwiff_odds} vs Lay {lay_price} => Rating {rating_pct}%")
+
+                                                                            # Send kwiff alert(s)
+                                                                            try:
+                                                                                title = f"{player_data['name']} - Kwiff AGS Combo {kwiff_odds}"
+                                                                                desc = f"Kwiff combo for {player_data['name']} on {mname}: {kwiff_odds} (lay {lay_price})"
+                                                                                fields = [
+                                                                                    {"name": "Match", "value": mname, "inline": False},
+                                                                                    {"name": "Kwiff Odds", "value": str(kwiff_odds), "inline": True},
+                                                                                    {"name": "Lay Odds", "value": str(lay_price), "inline": True},
+                                                                                    {"name": "Outcome IDs", "value": ",".join(str(i) for i in kw_combo.get('outcome_ids', [])), "inline": False}
+                                                                                ]
+                                                                                confirmed_available = bool(confirmed_starters)
+                                                                                is_player_confirmed = confirmed_starters and is_confirmed_starter(player_data['name'], confirmed_starters)
+                                                                                sent = send_alert_to_destinations('kwiff', title, desc, fields, footer=f"{player_data['name']} - Kwiff combo", rating=rating_pct, config=ALERT_CONFIG, confirmed_starters_available=confirmed_available, player_confirmed=is_player_confirmed)
+                                                                                if sent > 0:
+                                                                                    print(f"[KWIFF] Alert sent to {sent} destinations (rating {rating_pct}%)")
+                                                                                else:
+                                                                                    print(f"[KWIFF] No kwiff destinations matched threshold or lineup requirements (rating {rating_pct}%)")
+                                                                            except Exception as e:
+                                                                                print(f"[KWIFF] Error sending kwiff alert: {e}")
+                                                                else:
+                                                                    print(f"[KWIFF] No Kwiff mapping for Betfair {betfair_id}; skipping combo attempt for {player_data['name']}")
+                                                        except Exception as e:
+                                                            print(f"[KWIFF] Unexpected error during combo attempt: {e}")
                                                     else:
                                                         print('Combo Odds: no result')
 
@@ -2908,17 +3081,38 @@ def main():
                                                         embed_colour = 0xFF0000  # bright red for true arb
                                                         # Prefer ALERT_CONFIG destinations for Goose alerts
                                                         sent_count_goose = 0
+                                                        # Determine lineup state for sending to per-destination configs
+                                                        is_confirmed = confirmed_starters and is_confirmed_starter(pname, confirmed_starters)
+                                                        confirmed_available = bool(confirmed_starters)
+
                                                         if ALERT_CONFIG and 'goose' in ALERT_CONFIG:
                                                             try:
-                                                                sent_count_goose = send_alert_to_destinations('goose', title, desc, fields, footer=f"{pname} Goal/Assist + SOT", icon=GOOSE_FOOTER_ICON_URL, rating=rating, config=ALERT_CONFIG)
+                                                                sent_count_goose = send_alert_to_destinations('goose', title, desc, fields, footer=f"{pname} Goal/Assist + SOT", icon=GOOSE_FOOTER_ICON_URL, rating=rating, config=ALERT_CONFIG, confirmed_starters_available=confirmed_available, player_confirmed=is_confirmed)
                                                             except Exception as e:
                                                                 print(f"[GOOSE] Error sending via ALERT_CONFIG: {e}")
                                                                 sent_count_goose = 0
 
-                                                        # Fallback to legacy single-channel env var
+                                                        # If we didn't send due to lineup requirements, print a helpful debug message
+                                                        if sent_count_goose == 0:
+                                                            # Check if any destination would have accepted the alert when bypassing lineup checks
+                                                            try:
+                                                                any_no_wait = any(not d.get('wait_for_lineups', True) and d.get('enabled', True) for d in (ALERT_CONFIG.get('goose', []) if ALERT_CONFIG else []))
+                                                                if any_no_wait and not confirmed_available:
+                                                                    print(f"[GOOSE] No confirmed lineup available; some destinations are configured with wait_for_lineups=False and will receive alerts even before lineups are announced.")
+                                                            except Exception:
+                                                                pass
+
+                                                        # Fallback to legacy single-channel env var (legacy behavior remains unchanged)
                                                         if sent_count_goose == 0 and DISCORD_GOOSE_CHANNEL_ID:
-                                                            send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID, footer=f"{pname} Goal/Assist + SOT", icon=GOOSE_FOOTER_ICON_URL)
-                                                            sent_count_goose = 1
+                                                            # Only send fallback if player is confirmed (or we have no lineup if we allow testing without confirmed starters)
+                                                            # Legacy fallback has no per-destination flag, so preserve existing behavior: send only if confirmed or if we have no lineup checks here
+                                                            if confirmed_available and is_confirmed:
+                                                                send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID, footer=f"{pname} Goal/Assist + SOT", icon=GOOSE_FOOTER_ICON_URL)
+                                                                sent_count_goose = 1
+                                                            elif not confirmed_available:
+                                                                # If no lineup data at all, allow fallback to send for testing environments
+                                                                send_discord_embed(title, desc, fields, colour=embed_colour, channel_id=DISCORD_GOOSE_CHANNEL_ID, footer=f"{pname} Goal/Assist + SOT", icon=GOOSE_FOOTER_ICON_URL)
+                                                                sent_count_goose = 1
 
                                                         if sent_count_goose > 0:
                                                             save_state(pname, betfair_id, GOOSE_STATE_FILE)
@@ -3099,6 +3293,75 @@ def main():
                                                 combo_data=combo if combo else None,
                                                 run_number=run_number
                                             )
+
+                                            # --- KWIFF INTEGRATION: build combo on the fly for Anytime (AGS) markets ---
+                                            try:
+                                                if ENABLE_KWIFF:
+                                                    if ('anytime' in label.lower() or 'anytime goalscorer' in label.lower()):
+                                                        # Find Kwiff ID mapped to this Betfair match
+                                                        kwiff_id = get_kwiff_id_for_match(betfair_id)
+                                                        if kwiff_id:
+                                                            print(f"[KWIFF] Attempting combo build for {pname} on Kwiff event {kwiff_id}")
+                                                            try:
+                                                                from kwiff import build_combo_data_sync
+                                                                combo_resp = build_combo_data_sync(str(kwiff_id), pname)
+                                                            except Exception as e:
+                                                                combo_resp = None
+                                                                print(f"[KWIFF] Error building combo: {e}")
+
+                                                            if combo_resp:
+                                                                # Track kwiff combo
+                                                                try:
+                                                                    track_kwiff_combo(match_id=kwiff_id, match_name=mname, player_name=pname,
+                                                                                      event_id=combo_resp.get('event_id'), outcome_ids=combo_resp.get('outcome_ids', []),
+                                                                                      odds=combo_resp.get('odds'), fractional=combo_resp.get('fractionalOdds'),
+                                                                                      raw=combo_resp.get('raw'), markets=combo_resp.get('markets'), run_number=run_number)
+                                                                except Exception as e:
+                                                                    print(f"[KWIFF] Warning: failed to track combo: {e}")
+
+                                                                # Compute rating vs lay price and send alert if meets kwiff thresholds
+                                                                try:
+                                                                    lay_price = float(price)
+                                                                    kwiff_odds = float(combo_resp.get('odds')) if combo_resp.get('odds') is not None else None
+                                                                except Exception:
+                                                                    lay_price = None
+                                                                    kwiff_odds = None
+
+                                                                if kwiff_odds and lay_price and lay_price > 0:
+                                                                    rating_pct = round((kwiff_odds / lay_price) * 100, 2)
+                                                                    print(f"[KWIFF] Combo odds {kwiff_odds} vs Lay {lay_price} => Rating {rating_pct}%")
+
+                                                                    # Determine lineup state for kwiff destinations
+                                                                    confirmed_available = bool(confirmed_starters)
+                                                                    is_player_confirmed = confirmed_starters and is_confirmed_starter(pname, confirmed_starters)
+
+                                                                    # Send to configured kwiff destinations
+                                                                    try:
+                                                                        title = f"{pname} - Kwiff AGS Combo {kwiff_odds}"
+                                                                        desc = f"Kwiff combo for {pname} on {mname}: {kwiff_odds} (lay {lay_price})"
+                                                                        fields = [
+                                                                            {"name": "Match", "value": mname, "inline": False},
+                                                                            {"name": "Kwiff Odds", "value": str(kwiff_odds), "inline": True},
+                                                                            {"name": "Lay Odds", "value": str(lay_price), "inline": True},
+                                                                            {"name": "Outcome IDs", "value": ",".join(str(i) for i in combo_resp.get('outcome_ids', [])), "inline": False}
+                                                                        ]
+                                                                        sent = send_alert_to_destinations('kwiff', title, desc, fields, footer=f"{pname} - Kwiff combo", rating=rating_pct, config=ALERT_CONFIG, confirmed_starters_available=confirmed_available, player_confirmed=is_player_confirmed)
+                                                                        if sent > 0:
+                                                                            print(f"[KWIFF] Alert sent to {sent} destinations (rating {rating_pct}%)")
+                                                                        else:
+                                                                            print(f"[KWIFF] No kwiff destinations matched threshold or lineup requirements (rating {rating_pct}%)")
+                                                                    except Exception as e:
+                                                                        print(f"[KWIFF] Error sending kwiff alert: {e}")
+                                                        else:
+                                                            print(f"[KWIFF] No Kwiff mapping for Betfair {betfair_id}; skipping combo attempt for {pname}")
+                                                    else:
+                                                        # Not an Anytime market
+                                                        print(f"[KWIFF] Skipping combo build for {pname} - market '{label}' is not AGS")
+                                            except Exception as e:
+                                                print(f"[KWIFF] Unexpected error during combo attempt: {e}")
+
+                                            except Exception as e:
+                                                print(f"[KWIFF] Unexpected error during combo attempt: {e}")
                                             
                                             # Send separate WH message if configured
                                             alert_sent = False
@@ -3108,37 +3371,39 @@ def main():
                                             if not DISCORD_WH_CHANNEL_ID:
                                                 alert_block_reasons.append('no_wh_channel')
 
-                                            # Require lineup confirmation before sending WH alert
-                                            if not confirmed_starters:
-                                                print(f"[WH] Skipping alert for {pname} - no lineup data available")
-                                                alert_block_reasons.append('no_lineup')
-                                            elif not is_confirmed_starter(pname, confirmed_starters):
-                                                print(f"[WH] Skipping alert for {pname} - not in confirmed starters")
-                                                alert_block_reasons.append('not_in_confirmed_starters')
-                                            else:
-                                                if boosted_odds >= float(betfair_lay_bet[0]['lay_odds']):
-                                                    rating = round(boosted_odds / price * 100, 2)
-                                                    title = f"{pname} - {label} - {boosted_odds}/{price} ({rating}%)"
+                                            # Lineup state and player confirmation
+                                            confirmed_available = bool(confirmed_starters)
+                                            is_player_confirmed = confirmed_starters and is_confirmed_starter(pname, confirmed_starters)
 
-                                                    desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
-                                                    fields = []
+                                            if not confirmed_available:
+                                                print(f"[WH] No confirmed starters data available for match {wh_match_id}")
+                                            elif not is_player_confirmed:
+                                                print(f"[WH] Player {pname} is not a confirmed starter (but will still be evaluated for destinations configured with wait_for_lineups=False)")
 
-                                                    # Add confirmed starter field if applicable
-                                                    if confirmed_starters and is_confirmed_starter(pname, confirmed_starters):
-                                                        fields.append(("Confirmed Starter", "✅"))
-                                                    #build footer
-                                                    if label == "FGS":
-                                                        footer_text = f"{pname} FGS + AGS + Over 0.5 Goals ({int((wh_boost_multiplier-1)*100)}% WH Boost)"
-                                                    elif label == "AGS":
-                                                        footer_text = f"{pname} AGS + G/A + Over 0.5 Goals ({int((wh_boost_multiplier-1)*100)}% WH Boost)"
-                                                    # Prefer sending via ALERT_CONFIG destinations if configured
-                                                    sent_count = 0
-                                                    if ALERT_CONFIG and 'williamhill' in ALERT_CONFIG:
-                                                        try:
-                                                            sent_count = send_alert_to_destinations('williamhill', title, desc, fields, footer=footer_text, rating=rating, is_smarkets_only=False, config=ALERT_CONFIG)
-                                                        except Exception as e:
-                                                            print(f"[WH] Error sending via ALERT_CONFIG: {e}")
-                                                            sent_count = 0
+                                            # Evaluate price and attempt to send; per-destination filtering will respect wait_for_lineups
+                                            if boosted_odds >= float(betfair_lay_bet[0]['lay_odds']):
+                                                rating = round(boosted_odds / price * 100, 2)
+                                                title = f"{pname} - {label} - {boosted_odds}/{price} ({rating}%)"
+
+                                                desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
+                                                fields = []
+
+                                                # Add confirmed starter field if applicable
+                                                if confirmed_available and is_player_confirmed:
+                                                    fields.append(("Confirmed Starter", "✅"))
+                                                #build footer
+                                                if label == "FGS":
+                                                    footer_text = f"{pname} FGS + AGS + Over 0.5 Goals ({int((wh_boost_multiplier-1)*100)}% WH Boost)"
+                                                elif label == "AGS":
+                                                    footer_text = f"{pname} AGS + G/A + Over 0.5 Goals ({int((wh_boost_multiplier-1)*100)}% WH Boost)"
+                                                # Prefer sending via ALERT_CONFIG destinations if configured
+                                                sent_count = 0
+                                                if ALERT_CONFIG and 'williamhill' in ALERT_CONFIG:
+                                                    try:
+                                                        sent_count = send_alert_to_destinations('williamhill', title, desc, fields, footer=footer_text, rating=rating, is_smarkets_only=False, config=ALERT_CONFIG, confirmed_starters_available=confirmed_available, player_confirmed=is_player_confirmed)
+                                                    except Exception as e:
+                                                        print(f"[WH] Error sending via ALERT_CONFIG: {e}")
+                                                        sent_count = 0
 
                                                     # Fallback to legacy single-channel env var
                                                     if sent_count == 0 and DISCORD_WH_CHANNEL_ID:
