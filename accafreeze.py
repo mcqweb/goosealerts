@@ -24,6 +24,9 @@ def load_config():
             "summary_mode": False,
             "summary_refresh_hours": 1,
             "summary_send_seen": False,
+            # Global extra legs settings
+            "extra_back_threshold": 1.5,            # Default back_odds threshold for extra legs
+            "extra_max_items_per_message": 20,      # Max items per summary message (clusters won't be split)
             "sites": [
                 {
                     "name": "Main Channel",
@@ -34,7 +37,8 @@ def load_config():
                     "hours_to_ko": 24,
                     "min_back_odds": 1.8,
                     "min_rating": 105,
-                    "min_liquidity": 50
+                    "min_liquidity": 50,
+                    "summary_mode": False
                 }
             ]
         }
@@ -443,6 +447,7 @@ def send_discord_alert(opportunity, sites, is_realert=False):
     
     # Build embed
     title_prefix = "🔄 " if is_realert else ""
+    # Base embed (no hardcoded footer - per-site footer handled individually)
     embed = {
         "title": f"{title_prefix}{opportunity['outcome']} ({opportunity['back_odds']} / {opportunity['lay_odds']})",
         "description": f"**{opportunity['home_team']} v {opportunity['away_team']}**\n{opportunity['competition']}\n{opportunity['kickoff_display']}",
@@ -458,15 +463,11 @@ def send_discord_alert(opportunity, sites, is_realert=False):
                 "value": f"**{opportunity['lay_odds']}**",
                 "inline": True
             }
-        ],
-        "footer": {
-            "text": "Option for AccaFreeze Leg"
-        }
+        ]
     }
     
-    payload = {
-        "embeds": [embed]
-    }
+    # We'll copy this per-site and add footer/link fields as configured on each site
+    base_embed = embed.copy()
     
     success_count = 0
     
@@ -486,21 +487,53 @@ def send_discord_alert(opportunity, sites, is_realert=False):
             print(f"[DISCORD] Skipping unconfigured site: {site.get('name', 'Unknown')}")
             continue
         
+        # Build a per-site copy of the embed and attach footer/link/note if configured
+        from copy import deepcopy
+        local_embed = deepcopy(base_embed)
+        footer_link = site.get('footer_url') or site.get('summary_url')
+        footer_text = site.get('footer_text')
+        try:
+            if footer_link and footer_text:
+                local_embed.setdefault('fields', []).append({'name': '\u200b', 'value': f"[{footer_text}]({footer_link})", 'inline': False})
+            elif footer_link:
+                local_embed.setdefault('fields', []).append({'name': 'Link', 'value': footer_link, 'inline': False})
+            elif footer_text:
+                local_embed.setdefault('fields', []).append({'name': 'Note', 'value': footer_text, 'inline': False})
+        except Exception:
+            pass
+
+        payload = {"embeds": [local_embed]}
+
+        try:
+            # Dry-run mode prints payload instead of posting
+            cfg = load_config() or {}
+        except Exception:
+            cfg = {}
+        if cfg.get('debug'):
+            print(f"[DISCORD DEBUG] (DRY RUN) Would send alert to {site.get('name', 'Unknown')} (channel {channel_id}):")
+            try:
+                import json as _json
+                print(_json.dumps(local_embed, indent=2))
+            except Exception:
+                print(local_embed)
+            success_count += 1
+            continue
+
         try:
             url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
             headers = {
                 "Authorization": f"Bot {token}",
                 "Content-Type": "application/json"
             }
-            
+
             response = requests.post(url, json=payload, headers=headers, timeout=10)
-            
+
             if response.status_code in [200, 204]:
                 print(f"[DISCORD] ✅ Sent to {site.get('name', 'Unknown')}")
                 success_count += 1
             else:
                 print(f"[DISCORD] ❌ Failed to send to {site.get('name', 'Unknown')}: {response.status_code} {response.text}")
-        
+
         except Exception as e:
             print(f"[DISCORD] ❌ Error sending to {site.get('name', 'Unknown')}: {e}")
     
@@ -595,7 +628,42 @@ def send_discord_summary(site, opportunities, include_seen=False):
     if not embed:
         return False
 
+    # If the site defines footer text and/or a URL, prefer making the footer text a clickable link
+    footer_link = site.get('footer_url') or site.get('summary_url')
+    footer_text = site.get('footer_text')
+    try:
+        if footer_link and footer_text:
+            # Discord doesn't support clickable links in the footer, so use the author block (clickable) to show footer-style text
+            embed['author'] = {'name': footer_text, 'url': footer_link}
+            # Keep the footer area clean or use a concise footer if desired
+            # If there is an existing footer from build_summary_embed, leave it as-is
+        elif footer_link and not footer_text:
+            # No footer text to display; make the title clickable
+            embed['url'] = footer_link
+        elif footer_text:
+            # No link, but we have footer text — set it in the footer area
+            try:
+                embed['footer'] = {'text': footer_text}
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     payload = {"embeds": [embed]}
+
+    # If global debug is enabled, do a dry-run and print the payload instead of posting
+    try:
+        cfg = load_config() or {}
+    except Exception:
+        cfg = {}
+    if cfg.get('debug'):
+        print(f"[SUMMARY DEBUG] (DRY RUN) Would send embed to {site.get('name', 'Unknown')} (channel {channel_id}):")
+        try:
+            import json as _json
+            print(_json.dumps(embed, indent=2))
+        except Exception:
+            print(embed)
+        return True
 
     try:
         url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
@@ -732,33 +800,56 @@ def check_opportunities(qualifying, sites, seen_matches, debug=False):
             site_min_rating = site.get('min_rating', 105)
             site_max_hours = site.get('hours_to_ko', 24)
             site_min_liquidity = site.get('min_liquidity', 50)
-            
-            # Check if meets this site's criteria
-            meets_criteria = (lay_odds >= site_min_lay and 
-                            back_odds >= site_min_back and 
-                            rating >= site_min_rating and
-                            hours_until_ko <= site_max_hours and
-                            lay_liquidity >= site_min_liquidity)
-            
+
+            # For extra_legs sites, use different criteria: back_odds must be <= extra_back_threshold
+            if site.get('extra_legs', False):
+                site_threshold = float(site.get('extra_back_threshold', site_min_back))
+                meets_criteria = (
+                    float(back_odds) <= site_threshold and
+                    rating >= site_min_rating and
+                    hours_until_ko <= site_max_hours and
+                    lay_liquidity >= site_min_liquidity
+                )
+            else:
+                # Check if meets this site's normal criteria
+                meets_criteria = (
+                    lay_odds >= site_min_lay and
+                    back_odds >= site_min_back and
+                    rating >= site_min_rating and
+                    hours_until_ko <= site_max_hours and
+                    lay_liquidity >= site_min_liquidity
+                )
+
             if not meets_criteria:
                 if not already_seen:
                     reasons = []
-                    if lay_odds < site_min_lay:
-                        reasons.append(f"lay {lay_odds} < {site_min_lay}")
-                    if back_odds < site_min_back:
-                        reasons.append(f"back {back_odds} < {site_min_back}")
-                    if rating < site_min_rating:
-                        reasons.append(f"rating {rating:.2f}% < {site_min_rating}%")
-                    if hours_until_ko > site_max_hours:
-                        reasons.append(f"hours {hours_until_ko:.1f} > {site_max_hours}")
-                    if lay_liquidity < site_min_liquidity:
-                        reasons.append(f"liquidity £{lay_liquidity} < £{site_min_liquidity}")
+                    if site.get('extra_legs', False):
+                        # Explain why extra_legs site didn't qualify
+                        if float(back_odds) > site_threshold:
+                            reasons.append(f"back {back_odds} > {site_threshold}")
+                        if rating < site_min_rating:
+                            reasons.append(f"rating {rating:.2f}% < {site_min_rating}%")
+                        if hours_until_ko > site_max_hours:
+                            reasons.append(f"hours {hours_until_ko:.1f} > {site_max_hours}")
+                        if lay_liquidity < site_min_liquidity:
+                            reasons.append(f"liquidity £{lay_liquidity} < £{site_min_liquidity}")
+                    else:
+                        if lay_odds < site_min_lay:
+                            reasons.append(f"lay {lay_odds} < {site_min_lay}")
+                        if back_odds < site_min_back:
+                            reasons.append(f"back {back_odds} < {site_min_back}")
+                        if rating < site_min_rating:
+                            reasons.append(f"rating {rating:.2f}% < {site_min_rating}%")
+                        if hours_until_ko > site_max_hours:
+                            reasons.append(f"hours {hours_until_ko:.1f} > {site_max_hours}")
+                        if lay_liquidity < site_min_liquidity:
+                            reasons.append(f"liquidity £{lay_liquidity} < £{site_min_liquidity}")
                     print(f"[SITE] ❌ Doesn't qualify for: {site.get('name', 'Unknown')} ({', '.join(reasons)})")
                 continue
 
             # Mark as meeting criteria for potential summary inclusion
             met_sites.append(site)
-            
+
             # Meets criteria - check if new alert or re-alert
             if already_seen:
                 # Check if re-alerts enabled and rating increased enough
@@ -766,7 +857,7 @@ def check_opportunities(qualifying, sites, seen_matches, debug=False):
                     previous_rating = get_previous_rating(match_id, outcome_name, channel_id, seen_matches)
                     required_increase = site.get('realert_rating_increase', 5)
                     rating_increase = rating - previous_rating
-                    
+
                     if rating_increase >= required_increase:
                         realert_sites.append(site)
                         print(f"[SITE] 🔄 Re-alert for: {site.get('name', 'Unknown')} (rating increased {rating_increase:.2f}% from {previous_rating:.2f}% to {rating:.2f}%)")
@@ -777,7 +868,10 @@ def check_opportunities(qualifying, sites, seen_matches, debug=False):
             else:
                 # New alert
                 qualifying_sites.append(site)
-                print(f"[SITE] ✅ Qualifies for: {site.get('name', 'Unknown')} (rating {rating:.2f}% >= {site_min_rating}%)")
+                if site.get('extra_legs', False):
+                    print(f"[SITE] ✅ Qualifies for: {site.get('name', 'Unknown')} (extra legs: back {back_odds} <= {site_threshold}, rating {rating:.2f}% >= {site_min_rating}%)")
+                else:
+                    print(f"[SITE] ✅ Qualifies for: {site.get('name', 'Unknown')} (rating {rating:.2f}% >= {site_min_rating}%)")
         
         if not qualifying_sites and not realert_sites and not met_sites:
             print(f"[SKIP] Doesn't meet criteria for any enabled site")
@@ -974,6 +1068,11 @@ def main():
                 if not site.get('summary_mode', False):
                     continue
 
+                # Sites configured for extra_legs should NOT receive the regular summary
+                if site.get('extra_legs', False):
+                    print(f"[SUMMARY] Skipping regular summary for extra_legs site: {site.get('name','Unknown')}")
+                    continue
+
                 channel_id = site.get('channel_id')
                 if not channel_id:
                     continue
@@ -1030,6 +1129,161 @@ def main():
                 for opp, site_obj, is_realert in items:
                     mark_match_seen(opp['match_id'], opp['outcome_name'], channel_id, opp['rating'], seen_matches)
                     print(f"[TRACKING] Marked summary item as seen for {site_obj.get('name', 'Unknown')}: {opp['match_id']}_{opp['outcome_name']} @ {opp['rating']:.2f}%")
+
+        # --- EXTRA LEGS SUMMARY ---
+        # For sites that have 'extra_legs' enabled, build and send compact summaries of matches
+        # where the Sky Bet back odds are below the configured threshold. These are summary-only
+        # alerts grouped by kickoff time and packed into messages without splitting items that
+        # share the same KO time.
+        global_extra_threshold = float(config.get('extra_back_threshold', 1.5))
+        global_max_items = int(config.get('extra_max_items_per_message', 20))
+
+        for site in enabled_sites:
+            if not site.get('enabled', True):
+                continue
+            if not site.get('extra_legs', False):
+                continue
+
+            channel_id = site.get('channel_id')
+            token = site.get('discord_token')
+            if not channel_id or not token:
+                print(f"[EXTRA] Skipping site (missing channel/token): {site.get('name','Unknown')}")
+                continue
+
+            site_threshold = float(site.get('extra_back_threshold', global_extra_threshold))
+            site_max = int(site.get('extra_max_items_per_message', global_max_items))
+
+            # Collect eligible opps for this site
+            extra_items = []
+            for opp in opportunities:
+                if opp.get('back_odds') is None:
+                    continue
+                try:
+                    back_val = float(opp.get('back_odds') or 0)
+                except Exception:
+                    # If we cannot coerce to float, skip
+                    continue
+
+                # Use inclusive '<=' per request (include threshold value)
+                if back_val <= site_threshold:
+                    already_seen = is_match_seen(opp['match_id'], opp['outcome_name'], channel_id, seen_matches)
+                    if already_seen and not site.get('summary_send_seen', False):
+                        continue
+                    extra_items.append(opp)
+
+            if not extra_items:
+                continue
+
+            # Group by kickoff_display (do not split items that share the same KO)
+            groups = {}
+            for opp in extra_items:
+                ko = opp.get('kickoff_display', 'Unknown KO')
+                groups.setdefault(ko, []).append(opp)
+
+            # Sort groups by earliest KO
+            group_list = sorted(groups.items(), key=lambda kv: min([o.get('hours_until_ko', float('inf')) for o in kv[1]]))
+
+            # Pack groups into batches of up to site_max items, ensuring group atomicity
+            batches = []
+            current_batch = []
+            current_count = 0
+            for ko, group in group_list:
+                gsize = len(group)
+                if current_count + gsize > site_max and current_batch:
+                    batches.append(current_batch)
+                    current_batch = []
+                    current_count = 0
+                current_batch.extend(group)
+                current_count += gsize
+            if current_batch:
+                batches.append(current_batch)
+
+            # Check summary refresh state for this site so we don't resend too often
+            extra_key = f"extra_{channel_id}_{site.get('name', 'unnamed')}"
+            last_iso = summary_state.get(extra_key)
+            allowed = True
+            try:
+                site_refresh_hours = float(site.get('summary_refresh_hours', summary_refresh_hours))
+            except Exception:
+                site_refresh_hours = summary_refresh_hours
+
+            if last_iso:
+                try:
+                    last_dt = datetime.fromisoformat(last_iso)
+                    if last_dt.tzinfo is None:
+                        last_dt = last_dt.replace(tzinfo=timezone.utc)
+                    if (now_utc - last_dt) < timedelta(hours=site_refresh_hours):
+                        allowed = False
+                        next_allowed = last_dt + timedelta(hours=site_refresh_hours)
+                        print(f"[EXTRA] Skipping extra-legs summary for {site.get('name','Unknown')} — next allowed at {next_allowed.isoformat()}")
+                except Exception:
+                    pass
+
+            if not allowed:
+                continue
+
+            # Send each batch as a compact extra-legs summary
+            for bidx, batch in enumerate(batches, 1):
+                # Build description lines grouped by KO
+                by_ko = {}
+                for opp in batch:
+                    ko = opp.get('kickoff_display', 'Unknown KO')
+                    by_ko.setdefault(ko, []).append(opp)
+
+                desc_lines = []
+                for ko, items in sorted(by_ko.items(), key=lambda kv: min([i.get('hours_until_ko', float('inf')) for i in kv[1]])):
+                    desc_lines.append(f"__{ko}__")
+                    for it in items:
+                        # Determine opposition
+                        if it.get('outcome') == it.get('home_team'):
+                            opp_name = it.get('away_team')
+                        else:
+                            opp_name = it.get('home_team')
+                        desc_lines.append(f"**{it.get('outcome')}** (vs {opp_name}) @ {it.get('back_odds')}")
+                    desc_lines.append("")
+
+                description = "\n".join(desc_lines)
+
+                # Title: keep it non-clickable and concise
+                embed = {
+                    'title': 'AccaFreeze — Possible Extra Legs',
+                    'description': description,
+                    'color': 0xFFAA00
+                }
+
+                # Add footer_url/footer_text as a bottom field. If both are present, show a clickable link
+                footer_link = site.get('footer_url') or site.get('summary_url')
+                footer_text = site.get('footer_text')
+                try:
+                    if footer_link and footer_text:
+                        # Use markdown link so the displayed text is footer_text and clickable
+                        embed.setdefault('fields', []).append({'name': '\u200b', 'value': f"[{footer_text}]({footer_link})", 'inline': False})
+                    elif footer_link:
+                        # No text: show the URL as-is
+                        embed.setdefault('fields', []).append({'name': 'Link', 'value': footer_link, 'inline': False})
+                    elif footer_text:
+                        embed.setdefault('fields', []).append({'name': 'Note', 'value': footer_text, 'inline': False})
+                except Exception:
+                    pass
+
+                payload = {"embeds": [embed]}
+                try:
+                    url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+                    headers = {"Authorization": f"Bot {token}", "Content-Type": "application/json"}
+                    resp = requests.post(url, json=payload, headers=headers, timeout=10)
+                    if resp.status_code in [200, 204]:
+                        print(f"[EXTRA] ✅ Sent extra-legs summary to {site.get('name','Unknown')} (batch {bidx}/{len(batches)}) with {len(batch)} items")
+                        # Mark each included item as seen for that channel
+                        for it in batch:
+                            mark_match_seen(it['match_id'], it['outcome_name'], channel_id, it.get('rating', 0), seen_matches)
+                            print(f"[TRACKING] Marked extra item as seen for {site.get('name','Unknown')}: {it['match_id']}_{it['outcome_name']}")
+                        # Update summary state to reflect send time
+                        summary_state[extra_key] = now_utc.isoformat()
+                        save_summary_state(summary_state)
+                    else:
+                        print(f"[EXTRA] ❌ Failed to send extra-legs summary to {site.get('name','Unknown')}: {resp.status_code} {resp.text}")
+                except Exception as e:
+                    print(f"[EXTRA] ❌ Error sending extra-legs summary to {site.get('name','Unknown')}: {e}")
     
     # Save to file
     if opportunities:

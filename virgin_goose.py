@@ -473,13 +473,33 @@ def load_alert_config():
                     print(f"[WARN] Destination in '{alert_type}' missing required fields: {dest}")
                     continue
                 
-                # Convert color string to int if present
-                if 'color' in dest and isinstance(dest['color'], str):
-                    try:
-                        dest['color'] = int(dest['color'], 16)
-                    except Exception:
-                        print(f"[WARN] Invalid color format in '{alert_type}': {dest['color']}")
-                        dest['color'] = 0x3AA3E3  # Default color
+                # Convert color to int if present. Accept formats like "FF0000", "0xFF0000", "#FF0000", or decimal strings/ints
+                if 'color' in dest:
+                    cval = dest['color']
+                    # If it's a string, normalize common prefixes
+                    if isinstance(cval, str):
+                        cs = cval.strip()
+                        if cs.startswith('#'):
+                            cs = cs[1:]
+                        if cs.lower().startswith('0x'):
+                            cs = cs[2:]
+                        # Try hex parse first
+                        try:
+                            dest['color'] = int(cs, 16)
+                        except Exception:
+                            # Try decimal parse as fallback
+                            try:
+                                dest['color'] = int(cval)
+                            except Exception:
+                                print(f"[WARN] Invalid color format in '{alert_type}': {dest['color']}")
+                                dest['color'] = 0x3AA3E3  # Default color
+                    else:
+                        # If it's already numeric-ish, coerce to int
+                        try:
+                            dest['color'] = int(cval)
+                        except Exception:
+                            print(f"[WARN] Invalid color format in '{alert_type}': {dest['color']}")
+                            dest['color'] = 0x3AA3E3  # Default color
         
         print(f"[CONFIG] Loaded alert configuration from {ALERT_CONFIG_FILE}")
 
@@ -564,7 +584,7 @@ ENABLE_KWIFF = os.getenv("ENABLE_KWIFF", "1") == "1"
 KWIFF_COUNTRY = os.getenv("KWIFF_COUNTRY", "GB")
 
 # ========= DISCORD =========
-def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=None, footer=None,icon=None, bot_token=None):
+def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=None, footer=None, icon=None, bot_token=None, footer_url=None):
     if not DISCORD_ENABLED:
         return
 
@@ -591,6 +611,21 @@ def send_discord_embed(title, description, fields, colour=0x3AA3E3, channel_id=N
     else:
         # Note: Discord recommends using 'timestamp' as a top-level key for the embed
         embed["timestamp"] = datetime.now(london).isoformat()
+
+    # --- 4. Add a clickable link when a footer_url is provided ---
+    # Discord does not support clickable links inside the footer text itself, so we:
+    #  - set the embed 'url' so the title becomes clickable
+    #  - append a markdown link to the description so it's clearly visible and clickable
+    if footer_url:
+        try:
+            embed['url'] = footer_url
+        except Exception:
+            pass
+        try:
+            embed['description'] = (embed.get('description', '') or '') + f"\n\n[Open link]({footer_url})"
+        except Exception:
+            pass
+
     payload = {"embeds": [embed], "content": ""}
 
     # Use provided bot token or fall back to default
@@ -666,7 +701,16 @@ def send_alert_to_destinations(alert_type, title, description, fields, footer=No
             continue
         
         # Get color and prefix (with defaults)
-        colour = dest.get('color', 0x3AA3E3)
+        colour = dest.get('color')
+        # If destination didn't specify a color, use sensible defaults per alert type
+        if colour is None:
+            default_colors = {
+                'arb': 0xFFB80C,          # orange for arbs
+                'williamhill': 0x00143C,  # deep blue for WH
+                'ladbrokes': 0xF01E28,    # red for Ladbrokes
+                'goose': 0xFF0000         # red for Goose alerts
+            }
+            colour = default_colors.get(alert_type, 0x3AA3E3)  # fallback blue
         
         # Use destination-specific prefix if provided, otherwise use default based on alert type
         prefix = dest.get('prefix', '')
@@ -853,28 +897,24 @@ def track_player_name(player_name, site_name, match_id=None, team_name=None, fix
         fixture: Optional fixture string (e.g., 'Manchester United v Liverpool')
     
     Note:
-        If team_name is None and fixture is provided, attempts to extract team from fixture.
+        If team_name is None and fixture is provided, do NOT attempt to infer which team the player belongs to.
+        This avoids incorrect assignments (e.g., assuming home team) when the site doesn't specify a team.
         Ignores non-player names like 'No Goalscorer'.
     """
     # Skip non-player names
     if not is_valid_player_name(player_name):
         return
-    # Extract team from fixture if not provided
-    if team_name is None and fixture:
+
+    # Normalize fixture string if present but do NOT infer team from fixture
+    if fixture:
         try:
             # Normalize whitespace and strip control characters
-            norm_fixture = re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]+", "", fixture)).strip()
-            # Split using several common separators (v, vs, -, –, —) case-insensitive
-            parts = re.split(r"\s+(?:v\.?|vs\.?|vs|\-|–|—)\s+", norm_fixture, flags=re.IGNORECASE)
-            if len(parts) >= 2:
-                team_name = parts[0].strip()
-                # Keep cleaned fixture as well
-                fixture = f"{parts[0].strip()} v {parts[1].strip()}"
+            fixture = re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]+", "", fixture)).strip()
+            # Standardize common separators to ' v '
+            fixture = re.sub(r"\s+(?:v\.?|vs\.?|vs|\-|–|—)\s+", " v ", fixture, flags=re.IGNORECASE)
         except Exception:
-            # Fallback to simple split if regex fails
-            parts = fixture.split(' v ')
-            if len(parts) >= 2:
-                team_name = parts[0].strip()
+            # Leave fixture as-is on failure
+            fixture = fixture
 
     # Normalize empty strings to None
     if team_name is not None:
@@ -2219,13 +2259,36 @@ def combine_betfair_and_exchange_odds(betfair_odds, exchange_odds, market_type, 
     return combined
 
 # ========= STATE =========
+def _normalize_alert_key_player(player_name: str) -> str:
+    """Normalize the player portion of an alert key while preserving any label suffix.
+
+    Example: "Nico O–Reilly_FGS" -> "nico o reilly_FGS" (normalize name but keep "_FGS")
+    """
+    if not player_name:
+        return ''
+    # Preserve suffixes after first underscore (commonly used for market labels)
+    if '_' in player_name:
+        parts = player_name.split('_')
+        base = parts[0]
+        suffix = '_' + '_'.join(parts[1:]) if len(parts) > 1 else ''
+    else:
+        base = player_name
+        suffix = ''
+
+    norm_base = normalize_name(base)
+    return f"{norm_base}{suffix}"
+
+
 def save_state(player_name, match_id,file):
     """Mark (match_id, player_name) as alerted in the state file.
+
+    Keys now use normalized player names to avoid duplicate alerts caused by
+    minor name variations (e.g., different hyphen/dash characters).
 
     State format:
     {
         "alerted": {
-            "{match_id}_{player_name}": "<iso-timestamp>",
+            "{match_id}_{normalized_player_name}": "<iso-timestamp>",
             ...
         }
     }
@@ -2241,12 +2304,25 @@ def save_state(player_name, match_id,file):
         state = {}
 
     alerted = state.get('alerted', {}) if isinstance(state, dict) else {}
-    key = f"{match_id}_{player_name}"
+    normalized_player = _normalize_alert_key_player(player_name)
+    normalized_key = f"{match_id}_{normalized_player}"
+
+    # Migrate any legacy raw keys (avoid creating duplicates if the same player was alerted before normalization)
+    raw_key = f"{match_id}_{player_name}"
+    if raw_key in alerted and raw_key != normalized_key:
+        try:
+            alerted[normalized_key] = alerted.pop(raw_key)
+            print(f"[INFO] Migrated legacy alert key {raw_key} -> {normalized_key}")
+        except Exception:
+            pass
+
     try:
-        alerted[key] = datetime.now(timezone.utc).isoformat()
+        alerted[normalized_key] = datetime.now(timezone.utc).isoformat()
     except Exception:
-        alerted[key] = time.time()
+        alerted[normalized_key] = time.time()
     state['alerted'] = alerted
+
+    print(f"[ALERT STATE] Saved alert key: {normalized_key}")
 
     tmp = file + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -2265,10 +2341,22 @@ def already_alerted(player_name, match_id, file, market=None):
         return False
 
     alerted = state.get('alerted', {}) if isinstance(state, dict) else {}
-    key = f"{match_id}_{player_name}"
+    normalized_player = _normalize_alert_key_player(player_name)
+    normalized_key = f"{match_id}_{normalized_player}"
+    raw_key = f"{match_id}_{player_name}"
     if market:
-        key = f"{key}_{market}"
-    return key in alerted
+        normalized_key = f"{normalized_key}_{market}"
+        raw_key = f"{raw_key}_{market}"
+
+    # Check normalized key first
+    if normalized_key in alerted:
+        print(f"[DEBUG] Already alerted (normalized key present): {normalized_key}")
+        return True
+    # Backwards-compat: if a legacy (raw) key exists, consider it already alerted
+    if raw_key in alerted:
+        print(f"[INFO] Legacy alert key present for {player_name} (match {match_id}); treating as already alerted")
+        return True
+    return False
 
 # ========= MAIN LOOP =========
 def main():
