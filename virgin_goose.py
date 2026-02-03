@@ -673,6 +673,32 @@ def format_lay_prices(exchanges: list) -> str:
     return " | ".join(parts)
 
 
+def format_kwiff_footer(markets: dict) -> str:
+    """Return a wheelchair-prefixed footer describing the Kwiff bet used, e.g. '♿ AGS + SoT' or '♿ AGS + O0.5'.
+
+    `markets` is expected to be a dict with keys 'ags' and 'goals' where the goals entry contains
+    'market_name' or 'outcome_name' to help determine whether it's a Shots On Target (SoT) or Total Goals O0.5.
+    """
+    if not markets:
+        return "♿ AGS"
+    goals = markets.get('goals') or {}
+    m_name = (goals.get('market_name') or '').lower()
+    o_name = (goals.get('outcome_name') or '').lower()
+
+    # Detect O0.5 in either market or outcome names
+    if '0.5' in o_name or '0.5' in m_name:
+        suffix = 'O0.5'
+    # Detect Shots On Target variants
+    elif any(k in m_name for k in ('shot', 'sot')) or any(k in o_name for k in ('shot', 'sot')):
+        suffix = 'SoT'
+    else:
+        # Fallback to a compact market name (sanitize whitespace)
+        raw = goals.get('market_name') or goals.get('outcome_name') or ''
+        suffix = raw.strip().replace('\n', ' ') if raw else 'combo'
+
+    return f"♿ AGS + {suffix}"
+
+
 def get_kwiff_id_for_match(betfair_market_id):
     """Return a Kwiff event ID for a given Betfair market ID, or None."""
     if not ENABLE_KWIFF:
@@ -3136,7 +3162,8 @@ def main():
                                                                                 ]
                                                                                 confirmed_available = bool(confirmed_starters)
                                                                                 is_player_confirmed = confirmed_starters and is_confirmed_starter(player_data['name'], confirmed_starters)
-                                                                                sent = send_alert_to_destinations('kwiff', title, desc, fields, footer=f"{player_data['name']} - Kwiff combo", rating=rating_pct, config=ALERT_CONFIG, confirmed_starters_available=confirmed_available, player_confirmed=is_player_confirmed)
+                                                                                footer_text = format_kwiff_footer(kw_combo.get('markets') if isinstance(kw_combo, dict) else None)
+                                                                                sent = send_alert_to_destinations('kwiff', title, desc, fields, footer=footer_text, rating=rating_pct, config=ALERT_CONFIG, confirmed_starters_available=confirmed_available, player_confirmed=is_player_confirmed)
                                                                                 if sent > 0:
                                                                                     print(f"[KWIFF] Alert sent to {sent} destinations (rating {rating_pct}%)")
                                                                                 else:
@@ -3440,7 +3467,8 @@ def main():
                                                                             {"name": "Lay Odds", "value": str(lay_price), "inline": True},
                                                                             {"name": "Outcome IDs", "value": ",".join(str(i) for i in combo_resp.get('outcome_ids', [])), "inline": False}
                                                                         ]
-                                                                        sent = send_alert_to_destinations('kwiff', title, desc, fields, footer=f"{pname} - Kwiff combo", rating=rating_pct, config=ALERT_CONFIG, confirmed_starters_available=confirmed_available, player_confirmed=is_player_confirmed)
+                                                                        footer_text = format_kwiff_footer(combo_resp.get('markets') if isinstance(combo_resp, dict) else None)
+                                                                        sent = send_alert_to_destinations('kwiff', title, desc, fields, footer=footer_text, rating=rating_pct, config=ALERT_CONFIG, confirmed_starters_available=confirmed_available, player_confirmed=is_player_confirmed)
                                                                         if sent > 0:
                                                                             print(f"[KWIFF] Alert sent to {sent} destinations (rating {rating_pct}%)")
                                                                         else:

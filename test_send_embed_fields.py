@@ -94,6 +94,22 @@ def test_send_alert_to_destinations_with_dict_fields(monkeypatch):
     assert called['fields'][0]['name'] == 'Match' and called['fields'][0]['value'] == 'Test Match'
 
 
+def test_format_kwiff_footer():
+    from virgin_goose import format_kwiff_footer
+
+    o05_markets = {'goals': {'market_name': 'Total Goals', 'outcome_name': 'Over 0.5'}}
+    out = format_kwiff_footer(o05_markets)
+    assert out == '♿ AGS + O0.5'
+
+    sot_markets = {'goals': {'market_name': 'Shots On Target', 'outcome_name': 'Shots On Target (incl. OT)'}}
+    out2 = format_kwiff_footer(sot_markets)
+    assert out2 == '♿ AGS + SoT'
+
+    unknown_markets = {'goals': {'market_name': 'Some Market', 'outcome_name': 'Special Case'}}
+    out3 = format_kwiff_footer(unknown_markets)
+    assert out3.startswith('♿ AGS')
+
+
 def test_format_lay_prices_bolds_best():
     """The helper should bold the best (lowest) lay option and append sizes correctly."""
     from virgin_goose import format_lay_prices
