@@ -92,3 +92,17 @@ def test_send_alert_to_destinations_with_dict_fields(monkeypatch):
     assert sent == 1
     assert 'fields' in called and isinstance(called['fields'], list)
     assert called['fields'][0]['name'] == 'Match' and called['fields'][0]['value'] == 'Test Match'
+
+
+def test_format_lay_prices_bolds_best():
+    """The helper should bold the best (lowest) lay option and append sizes correctly."""
+    from virgin_goose import format_lay_prices
+
+    exchanges = [
+        {'site': 'Betfair', 'lay_odds': 11.0, 'lay_size': 13},
+        {'site': 'Smarkets', 'lay_odds': 9.6, 'lay_size': 5}
+    ]
+
+    out = format_lay_prices(exchanges)
+    assert "**Smarkets @ 9.6** (£5)" in out
+    assert "Betfair @ 11.0 (£13)" in out

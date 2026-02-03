@@ -613,6 +613,66 @@ def destination_allows_lineups(dest: dict, confirmed_starters_available: bool, p
     return confirmed_starters_available and player_confirmed
 
 
+def format_lay_prices(exchanges: list) -> str:
+    """Format a list of exchange dicts into a display string with the best (lowest) lay price bolded.
+
+    The function accepts exchange dicts with different key names (site/site_name, lay_odds/price, lay_size/size/liquidity).
+    The size (liquidity) is appended after the (bolded) site @ odds string as ' (£N)'.
+    """
+    if not exchanges:
+        return ""
+
+    # Helper accessors for common key names
+    def _site(e):
+        return e.get('site') or e.get('site_name') or str(e.get('site', 'Unknown'))
+    def _odds(e):
+        val = e.get('lay_odds') if 'lay_odds' in e else e.get('price') if 'price' in e else e.get('odds')
+        try:
+            return float(val)
+        except Exception:
+            try:
+                return float(str(val))
+            except Exception:
+                return float('inf')
+    def _odds_str(e):
+        # Preserve original string formatting when possible
+        if 'lay_odds' in e:
+            return str(e.get('lay_odds'))
+        if 'price' in e:
+            return str(e.get('price'))
+        return str(e.get('lay_odds') or e.get('price') or e.get('odds') or '')
+    def _size(e):
+        return e.get('lay_size') or e.get('liquidity') or e.get('size')
+
+    # Find best (lowest) lay odds
+    try:
+        best = min(exchanges, key=lambda x: _odds(x))
+    except Exception:
+        best = None
+
+    parts = []
+    for e in exchanges:
+        site = _site(e)
+        odds_str = _odds_str(e)
+        size = _size(e)
+        is_best = False
+        if best is not None:
+            try:
+                is_best = (site.lower() == _site(best).lower() and abs(_odds(e) - _odds(best)) < 1e-9)
+            except Exception:
+                is_best = False
+
+        left = f"{site} @ {odds_str}"
+        if is_best:
+            left = f"**{left}**"
+        if size:
+            parts.append(f"{left} (£{int(size)})")
+        else:
+            parts.append(left)
+
+    return " | ".join(parts)
+
+
 def get_kwiff_id_for_match(betfair_market_id):
     """Return a Kwiff event ID for a given Betfair market ID, or None."""
     if not ENABLE_KWIFF:
@@ -2984,17 +3044,8 @@ def main():
                                 lay_size = best_odds['lay_size']
                                 has_size = best_odds['has_size']
                                 
-                                # Collect all exchange lay prices for display
-                                all_lay_prices = []
-                                for exchange in player_exchanges:
-                                    site = exchange['site']
-                                    odds = exchange['lay_odds']
-                                    size = exchange['lay_size']
-                                    if exchange['has_size']:
-                                        all_lay_prices.append(f"{site} @ {odds} (£{int(size)})")
-                                    else:
-                                        all_lay_prices.append(f"{site} @ {odds}")
-                                lay_prices_text = " | ".join(all_lay_prices)
+                                # Collect all exchange lay prices for display (bold the best option)
+                                lay_prices_text = format_lay_prices(player_exchanges)
                                 
                                 # GOOSE ALERTS (only for Betfair with size and confirmed starters)
                                 if ENABLE_VIRGIN_GOOSE and mtype == betfair.AGS_MARKET_NAME and has_size and lay_size >= GBP_THRESHOLD_GOOSE:
@@ -3708,17 +3759,8 @@ def main():
                                     if has_size and lay_size < GBP_WH_THRESHOLD:
                                         continue
                                     
-                                    # Build lay prices text
-                                    lay_prices = []
-                                    for odd in odds_list:
-                                        site = odd.get('site_name', 'Unknown')
-                                        price = odd.get('lay_odds')
-                                        liq = odd.get('liquidity')
-                                        if liq:
-                                            lay_prices.append(f"{site} @ {price} (£{int(liq)})")
-                                        else:
-                                            lay_prices.append(f"{site} @ {price}")
-                                    lay_prices_text = " | ".join(lay_prices)
+                                    # Build lay prices text (bold the best option)
+                                    lay_prices_text = format_lay_prices(odds_list)
                                     
                                     label = "TOM"
                                     if already_alerted(player_name, wh_match_id, WH_STATE_FILE, market=label):
@@ -3817,17 +3859,8 @@ def main():
                                     if has_size and lay_size < GBP_WH_THRESHOLD:
                                         continue
                                     
-                                    # Build lay prices text
-                                    lay_prices = []
-                                    for odd in odds_list:
-                                        site = odd.get('site_name', 'Unknown')
-                                        price = odd.get('lay_odds')
-                                        liq = odd.get('liquidity')
-                                        if liq:
-                                            lay_prices.append(f"{site} @ {price} (£{int(liq)})")
-                                        else:
-                                            lay_prices.append(f"{site} @ {price}")
-                                    lay_prices_text = " | ".join(lay_prices)
+                                    # Build lay prices text (bold the best option)
+                                    lay_prices_text = format_lay_prices(odds_list)
                                     
                                     label = "HAT"
                                     if already_alerted(player_name, wh_match_id, WH_STATE_FILE, market=label):
