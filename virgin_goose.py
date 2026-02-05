@@ -699,6 +699,58 @@ def format_kwiff_footer(markets: dict) -> str:
     return f"♿ AGS + {suffix}"
 
 
+def build_kwiff_message(player_name: str, mname: str, ko_str: str, cname: str, kwiff_odds, lay_price, lay_prices_text: str, midid=None, best_site: str = None, is_confirmed: bool = False, markets: dict = None, rating_pct=None):
+    """Build title, description and fields for a Kwiff alert mirroring the Goose format.
+
+    Returns (title, desc, fields, footer)
+    """
+    def _fmt(v):
+        try:
+            f = float(v)
+        except Exception:
+            return str(v)
+        if abs(f - int(f)) < 1e-9:
+            return str(int(f))
+        s = f"{round(f,2):.2f}"
+        if '.' in s:
+            s = s.rstrip('0').rstrip('.')
+        return s
+
+    kp = _fmt(kwiff_odds)
+    lp = _fmt(lay_price)
+    rating = rating_pct
+    if rating is None:
+        try:
+            rating = round((float(kwiff_odds) / float(lay_price)) * 100, 2)
+        except Exception:
+            rating = None
+
+    # Format rating nicely (drop trailing .0 when integer)
+    if rating is not None:
+        try:
+            r_float = float(rating)
+            if abs(r_float - int(r_float)) < 1e-9:
+                rating_str = str(int(r_float))
+            else:
+                rating_str = str(round(r_float, 2)).rstrip('0').rstrip('.')
+        except Exception:
+            rating_str = str(rating)
+        title = f"{player_name} - {kp}/{lp} ({rating_str}%)"
+    else:
+        title = f"{player_name} - {kp}/{lp}"
+
+    desc = f"**{mname}** ({ko_str})\n{cname}\n\n**Lay Prices:** {lay_prices_text}"
+    if best_site and isinstance(best_site, str) and 'betfair' in best_site.lower() and midid:
+        desc = f"{desc}\n[Betfair Market](https://www.betfair.com/exchange/plus/football/market/{midid})"
+
+    fields = []
+    if is_confirmed:
+        fields.append(("Confirmed Starter", "✅"))
+
+    footer = format_kwiff_footer(markets)
+    return title, desc, fields, footer
+
+
 def get_kwiff_id_for_match(betfair_market_id):
     """Return a Kwiff event ID for a given Betfair market ID, or None."""
     if not ENABLE_KWIFF:
@@ -3150,19 +3202,28 @@ def main():
                                                                             rating_pct = round((kwiff_odds / lay_price) * 100, 2)
                                                                             print(f"[KWIFF] Combo odds {kwiff_odds} vs Lay {lay_price} => Rating {rating_pct}%")
 
-                                                                            # Send kwiff alert(s)
+                                                                            # Send kwiff alert(s) using Goose-style formatting (colour & footer will differ)
                                                                             try:
-                                                                                title = f"{player_data['name']} - Kwiff AGS Combo {kwiff_odds}"
-                                                                                desc = f"Kwiff combo for {player_data['name']} on {mname}: {kwiff_odds} (lay {lay_price})"
-                                                                                fields = [
-                                                                                    {"name": "Match", "value": mname, "inline": False},
-                                                                                    {"name": "Kwiff Odds", "value": str(kwiff_odds), "inline": True},
-                                                                                    {"name": "Lay Odds", "value": str(lay_price), "inline": True},
-                                                                                    {"name": "Outcome IDs", "value": ",".join(str(i) for i in kw_combo.get('outcome_ids', [])), "inline": False}
-                                                                                ]
-                                                                                confirmed_available = bool(confirmed_starters)
+                                                                                # Best site info available from `best_odds` earlier in this scope
+                                                                                best_site = best_odds.get('site') if isinstance(best_odds, dict) else None
                                                                                 is_player_confirmed = confirmed_starters and is_confirmed_starter(player_data['name'], confirmed_starters)
-                                                                                footer_text = format_kwiff_footer(kw_combo.get('markets') if isinstance(kw_combo, dict) else None)
+                                                                                confirmed_available = bool(confirmed_starters)
+
+                                                                                title, desc, fields, footer_text = build_kwiff_message(
+                                                                                    player_name=player_data['name'],
+                                                                                    mname=mname,
+                                                                                    ko_str=ko_str,
+                                                                                    cname=cname,
+                                                                                    kwiff_odds=kwiff_odds,
+                                                                                    lay_price=lay_price,
+                                                                                    lay_prices_text=lay_prices_text,
+                                                                                    midid=midid,
+                                                                                    best_site=best_site,
+                                                                                    is_confirmed=is_player_confirmed,
+                                                                                    markets=kw_combo.get('markets') if isinstance(kw_combo, dict) else None,
+                                                                                    rating_pct=rating_pct
+                                                                                )
+
                                                                                 sent = send_alert_to_destinations('kwiff', title, desc, fields, footer=footer_text, rating=rating_pct, config=ALERT_CONFIG, confirmed_starters_available=confirmed_available, player_confirmed=is_player_confirmed)
                                                                                 if sent > 0:
                                                                                     print(f"[KWIFF] Alert sent to {sent} destinations (rating {rating_pct}%)")
@@ -3457,17 +3518,26 @@ def main():
                                                                     confirmed_available = bool(confirmed_starters)
                                                                     is_player_confirmed = confirmed_starters and is_confirmed_starter(pname, confirmed_starters)
 
-                                                                    # Send to configured kwiff destinations
+                                                                    # Send to configured kwiff destinations (Goose-style formatting)
                                                                     try:
-                                                                        title = f"{pname} - Kwiff AGS Combo {kwiff_odds}"
-                                                                        desc = f"Kwiff combo for {pname} on {mname}: {kwiff_odds} (lay {lay_price})"
-                                                                        fields = [
-                                                                            {"name": "Match", "value": mname, "inline": False},
-                                                                            {"name": "Kwiff Odds", "value": str(kwiff_odds), "inline": True},
-                                                                            {"name": "Lay Odds", "value": str(lay_price), "inline": True},
-                                                                            {"name": "Outcome IDs", "value": ",".join(str(i) for i in combo_resp.get('outcome_ids', [])), "inline": False}
-                                                                        ]
-                                                                        footer_text = format_kwiff_footer(combo_resp.get('markets') if isinstance(combo_resp, dict) else None)
+                                                                        # Attempt to get best site name if available
+                                                                        best_site = None
+                                                                        if 'best_odd' in locals() and isinstance(best_odd, dict):
+                                                                            best_site = best_odd.get('site')
+                                                                        title, desc, fields, footer_text = build_kwiff_message(
+                                                                            player_name=pname,
+                                                                            mname=mname,
+                                                                            ko_str=ko_str,
+                                                                            cname=cname,
+                                                                            kwiff_odds=kwiff_odds,
+                                                                            lay_price=lay_price,
+                                                                            lay_prices_text=lay_prices_text,
+                                                                            midid=midid,
+                                                                            best_site=best_site,
+                                                                            is_confirmed=is_confirmed,
+                                                                            markets=combo_resp.get('markets') if isinstance(combo_resp, dict) else None,
+                                                                            rating_pct=rating_pct
+                                                                        )
                                                                         sent = send_alert_to_destinations('kwiff', title, desc, fields, footer=footer_text, rating=rating_pct, config=ALERT_CONFIG, confirmed_starters_available=confirmed_available, player_confirmed=is_player_confirmed)
                                                                         if sent > 0:
                                                                             print(f"[KWIFF] Alert sent to {sent} destinations (rating {rating_pct}%)")
@@ -3544,6 +3614,24 @@ def main():
                                                     alert_block_reasons.append('odds_below_lay')
 
                                             # Smarkets-only handling (run regardless of WH result)
+                                            # Ensure smarkets vars are defined to avoid NameError and detect Smarkets price if available
+                                            has_smarkets = False
+                                            smarkets_price = None
+                                            smarkets_liquidity = None
+                                            try:
+                                                # Look for Smarkets entries in the player_exchanges list (if present)
+                                                sm_entries = [e for e in player_exchanges if 'smarkets' in (e.get('site') or '').lower()] if 'player_exchanges' in locals() else []
+                                                if sm_entries:
+                                                    has_smarkets = True
+                                                    best_sm = min(sm_entries, key=lambda x: x.get('lay_odds', float('inf')))
+                                                    smarkets_price = best_sm.get('lay_odds')
+                                                    smarkets_liquidity = best_sm.get('lay_size') or best_sm.get('liquidity') or best_sm.get('size')
+                                            except Exception:
+                                                # Safe fallback - leave as defaults
+                                                has_smarkets = False
+                                                smarkets_price = None
+                                                smarkets_liquidity = None
+
                                             try:
                                                 if already_alerted(f"{pname}_{label}", wh_match_id, WH_SMARKETS_STATE_FILE):
                                                     alert_block_reasons.append('already_alerted_smarkets')

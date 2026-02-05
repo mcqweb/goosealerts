@@ -122,3 +122,30 @@ def test_format_lay_prices_bolds_best():
     out = format_lay_prices(exchanges)
     assert "**Smarkets @ 9.6** (£5)" in out
     assert "Betfair @ 11.0 (£13)" in out
+
+
+def test_build_kwiff_message_ruben_format():
+    from virgin_goose import build_kwiff_message
+
+    title, desc, fields, footer = build_kwiff_message(
+        player_name='Ruben Loftus-Cheek',
+        mname='Bologna v AC Milan',
+        ko_str='19:45',
+        cname='Serie A',
+        kwiff_odds=7.0,
+        lay_price=7.0,
+        lay_prices_text='Betfair @ 7 (£32)',
+        midid=12345,
+        best_site='Betfair',
+        is_confirmed=True,
+        markets={'goals': {'market_name': 'Total Goals', 'outcome_name': 'Over 0.5'}},
+        rating_pct=100
+    )
+
+    assert title == 'Ruben Loftus-Cheek - 7/7 (100%)'
+    assert '**Bologna v AC Milan** (19:45)' in desc
+    assert 'Serie A' in desc
+    assert 'Lay Prices' in desc and 'Betfair @ 7' in desc
+    assert '[Betfair Market](https://www.betfair.com/exchange/plus/football/market/12345)' in desc
+    assert ('Confirmed Starter', '✅') in fields
+    assert footer == '♿ AGS + O0.5'
